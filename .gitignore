@@ -1,0 +1,60 @@
+# Pixi environments
+.pixi/
+
+# Parsl execution logs
+runinfo/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Pytest
+.pytest_cache/
+
+# Pipeline mock context checkpoint files
+pipeline-stage-*.context
+
+# Apptainer / Singularity images
+*.sif
+*.simg
+
+# IDE / OS files
+.DS_Store
+.vscode/
+.idea/
+
+# Notes
+notes/
+
+# Logs
+casa-*.log
+
+# Docs build output
+site/
+public/
+
+# Cache directories
+.cache/
+
+# Large datasets and archives
+casarundata*
+*.tar.gz
