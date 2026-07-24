@@ -45,7 +45,7 @@ def get_local_threads_config() -> Config:
             ThreadPoolExecutor(
                 max_threads=4,
                 label='local_threads',
-                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=55055)
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
             )
         ],
         monitoring=get_monitoring_hub()
@@ -65,26 +65,46 @@ def get_local_subprocess_config() -> Config:
                     init_blocks=1,
                     max_blocks=1
                 ),
-                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=55055)
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
             )
         ],
         monitoring=get_monitoring_hub()
     )
 
-def get_condor_config() -> Config:
-    """Returns a Parsl Config tailored for HTCondor OSG execution."""
+def get_condor_config(max_tier0_workers: int = 50, max_weblog_workers: int = 2) -> Config:
+    """Returns a Parsl Config tailored for HTCondor OSG execution.
+    
+    Args:
+        max_tier0_workers: Dynamic upper limit for the number of pipeline crunching workers.
+        max_weblog_workers: Dynamic upper limit for the number of concurrent weblog rendering workers.
+    """
     return Config(
         executors=[
+            # 1. High-Memory Executor for pipeline crunching tasks (Tier0)
             HighThroughputExecutor(
-                label='htcondor_executor',
+                label='tier0_executor',
                 address=address_by_hostname(),
                 provider=CondorProvider(
                     init_blocks=1,
-                    max_blocks=10,
+                    min_blocks=0,
+                    max_blocks=max_tier0_workers, # Dynamically scales up to this limit based on queued tasks
                     worker_init=f"export PATH={os.environ.get('PATH', '')}:$PATH && export PYTHONPATH=/home/rxue/Workspace/nvme/nrao/github/pac-man/src:$PYTHONPATH",
-                    scheduler_options="getenv = true\nrequest_memory = 16384\n"
+                    scheduler_options="getenv = true\nrequest_memory = 32768\n" # Heavy tasks get 32GB RAM
                 ),
-                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=55055)
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
+            ),
+            # 2. Lower-Memory Executor dedicated for weblog rendering
+            HighThroughputExecutor(
+                label='weblog_executor',
+                address=address_by_hostname(),
+                provider=CondorProvider(
+                    init_blocks=1,
+                    min_blocks=0,
+                    max_blocks=max_weblog_workers, # Renderers don't need to scale infinitely
+                    worker_init=f"export PATH={os.environ.get('PATH', '')}:$PATH && export PYTHONPATH=/home/rxue/Workspace/nvme/nrao/github/pac-man/src:$PYTHONPATH",
+                    scheduler_options="getenv = true\nrequest_memory = 8192\n" # Weblogs only need 8GB RAM
+                ),
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
             )
         ],
         monitoring=get_monitoring_hub()
@@ -108,7 +128,7 @@ def get_slurm_config() -> Config:
         monitoring=get_monitoring_hub()
     )
 
-def initialize_parsl(backend: str = "subprocess"):
+def initialize_parsl(backend: str = "subprocess", max_tier0_workers: int = 50, max_weblog_workers: int = 2):
     """
     Initializes Parsl with the appropriate configuration.
     
@@ -121,7 +141,7 @@ def initialize_parsl(backend: str = "subprocess"):
     elif backend == "subprocess":
         config = get_local_subprocess_config()
     elif backend == "htcondor":
-        config = get_condor_config()
+        config = get_condor_config(max_tier0_workers=max_tier0_workers, max_weblog_workers=max_weblog_workers)
     elif backend == "slurm":
         config = get_slurm_config()
     else:

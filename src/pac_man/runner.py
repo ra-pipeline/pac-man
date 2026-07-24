@@ -16,7 +16,7 @@ from pac_man.config import initialize_parsl
 LOG = logging.getLogger(__name__)
 
 
-@python_app
+@python_app(executors=['weblog_executor'])
 def async_qa_and_weblog(context_path: str, working_dir: str, previous_render_future=None):
     """
     Parsl Python App that runs in a background subprocess.
@@ -71,10 +71,16 @@ def pac_man_reduce(
         session: list[str] | None = None,
         exitstage: int | None = None,
         startstage: int | None = None,
-        backend: str = 'subprocess'
+        backend: str = 'subprocess',
+        max_tier0_workers: int = 50,
+        max_weblog_workers: int = 2
 ):
     """
     Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
+    
+    Args:
+        max_tier0_workers: Maximum number of HTC Condor nodes to allocate for pipeline Tier0 execution.
+        max_weblog_workers: Maximum number of Condor nodes to allocate for background weblog rendering.
     """
     # 1. Pipeline imports (Localizing them here prevents Condor workers from triggering
     # CASA initialization when unpickling the runner module)
@@ -198,5 +204,9 @@ def pac_man_reduce(
         for future in background_futures:
             future.result()
         LOG.info("PAC-MAN: All background tasks complete. Workflow finished!")
-
+    
+    # Gracefully shutdown Parsl engine to prevent dirty exit warnings
+    import parsl
+    parsl.dfk().cleanup()
+    
     return context
