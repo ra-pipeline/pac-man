@@ -58,3 +58,6 @@ public/
 # Large datasets and archives
 casarundata*
 *.tar.gz
+
+# Processing directory
+proc/
