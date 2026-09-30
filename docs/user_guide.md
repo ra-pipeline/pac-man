@@ -48,17 +48,20 @@ context = pac_man_reduce(
 
 ### CLI Pipeline Runner
 
-The repository provides a consolidated test and execution script at `scripts/test_pipeline.py`. It uses `casa_tools.utils.resolve` to discover standard test MeasurementSets and maps telescope targets to default procedures:
+PAC-MAN provides the `pipeline-test` task mapped to `scripts/test_pipeline.py`. To prevent polluting the repository root with runtime logs (`casapy.log`), plots, and checkpoints, pipeline runs should always be executed from an isolated working directory (such as `proc/working/` or an external scratch directory) using `--manifest-path` (or `-m`):
 
 ```bash
-# Run VLA reduction (default: subprocess backend, procedure_hifv.xml)
-pixi run python scripts/test_pipeline.py --telescope vla
+# When working outside the repository, export PACMAN_ROOT:
+export PACMAN_ROOT=/path/to/pac-man
 
-# Run ALMA reduction with HTCondor backend
-pixi run python scripts/test_pipeline.py --telescope alma --backend htcondor
+# Run VLA reduction from your working directory (uses ../.. fallback inside repo):
+pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla
 
-# Dry-run validation (checks dataset discovery and configuration without executing)
-pixi run python scripts/test_pipeline.py --telescope alma --dry-run
+# Run ALMA reduction with HTCondor backend:
+pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma --backend htcondor
+
+# Dry-run validation (checks dataset discovery and configuration without executing):
+pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma --dry-run
 ```
 
 Supported CLI options:
@@ -70,6 +73,13 @@ Supported CLI options:
 - `--exitstage`: Stage number at which to stop execution.
 - `--dry-run`: Resolves dataset and validates parameters without executing reduction.
 - `--loglevel`: Logging verbosity (`debug`, `info`, `warning`, `error`). Default: `info`.
+
+#### Working Directory Isolation
+
+- **Inside repository subdirectories (e.g., `proc/working/`)**:
+  Leave `PACMAN_ROOT` unset. `${PACMAN_ROOT:-../..}` automatically resolves to `../..`, locating `pixi.toml` at the repository root while generating all CASA logs, checkpoints, and weblog assets locally in `working/`.
+- **From external directories outside the repository (e.g., `/tmp` or scratch directories)**:
+  With `PACMAN_ROOT` exported, `--manifest-path` points explicitly to the repository manifest, executing the pipeline locally in your current scratch directory.
 
 ## 3. Real-Time Monitoring
 

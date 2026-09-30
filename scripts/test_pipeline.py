@@ -4,11 +4,11 @@
 Consolidated end-to-end test runner for ALMA and VLA pipeline reduction
 workflows with CASA data path discovery and configurable execution backends.
 
-Usage:
-    pixi run python scripts/test_pipeline.py --telescope vla
-    pixi run python scripts/test_pipeline.py --telescope alma
-    pixi run python scripts/test_pipeline.py --telescope alma --backend htcondor
-    pixi run python scripts/test_pipeline.py --dry-run
+Usage (from an isolated working directory):
+    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla
+    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma
+    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma --backend htcondor
+    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --dry-run
 """
 
 from __future__ import annotations
