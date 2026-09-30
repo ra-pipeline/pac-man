@@ -54,4 +54,5 @@ pac-man = { path = ".", editable = true }
 test = "PYTHONPATH=.:src:tests pytest tests/"
 visualize = "parsl-visualize"
 dashboard = "streamlit run scripts/dashboard.py --server.headless true --server.fileWatcherType none"
+pipeline-test = "python $PIXI_PROJECT_ROOT/scripts/test_pipeline.py"
 
