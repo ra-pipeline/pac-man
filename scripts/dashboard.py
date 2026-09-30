@@ -7,8 +7,49 @@ import os
 
 st.set_page_config(layout="wide", page_title="PAC-MAN Dashboard")
 
-# Accept DB path from CLI arg or default to working/runinfo/monitoring.db
-DB_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.join("working", "runinfo", "monitoring.db")
+# Discover candidate databases across common execution locations
+discovered_dbs = []
+candidates = []
+init_cwd = os.environ.get("INIT_CWD")
+if init_cwd:
+    candidates.extend([
+        os.path.join(init_cwd, "runinfo", "monitoring.db"),
+        os.path.join(init_cwd, "working", "runinfo", "monitoring.db"),
+        os.path.join(init_cwd, "proc", "working", "runinfo", "monitoring.db"),
+    ])
+candidates.extend([
+    "runinfo/monitoring.db",
+    os.path.join("working", "runinfo", "monitoring.db"),
+    os.path.join("proc", "working", "runinfo", "monitoring.db"),
+])
+pixi_root = os.environ.get("PIXI_PROJECT_ROOT")
+if pixi_root:
+    candidates.extend([
+        os.path.join(pixi_root, "runinfo", "monitoring.db"),
+        os.path.join(pixi_root, "working", "runinfo", "monitoring.db"),
+        os.path.join(pixi_root, "proc", "working", "runinfo", "monitoring.db"),
+    ])
+
+seen_paths = set()
+for c in candidates:
+    abs_c = os.path.abspath(c)
+    if abs_c not in seen_paths and os.path.exists(abs_c):
+        seen_paths.add(abs_c)
+        discovered_dbs.append(c)
+
+if len(sys.argv) > 1:
+    DB_PATH = sys.argv[1]
+elif "PACMAN_MONITORING_DB" in os.environ:
+    DB_PATH = os.environ["PACMAN_MONITORING_DB"]
+elif discovered_dbs:
+    if len(discovered_dbs) > 1:
+        DB_PATH = st.sidebar.selectbox("Monitoring Database", discovered_dbs, index=0)
+    else:
+        DB_PATH = discovered_dbs[0]
+elif init_cwd and os.path.exists(os.path.join(init_cwd, "runinfo", "monitoring.db")):
+    DB_PATH = os.path.join(init_cwd, "runinfo", "monitoring.db")
+else:
+    DB_PATH = os.path.join("working", "runinfo", "monitoring.db")
 
 
 def get_data(query: str, params: tuple | list | None = None) -> pd.DataFrame:
