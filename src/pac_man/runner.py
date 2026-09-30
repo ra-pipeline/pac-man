@@ -1,5 +1,4 @@
-"""
-PAC-MAN Pipeline Runner
+"""PAC-MAN Pipeline Runner
 
 This script provides a drop-in replacement for the standard pipeline's `recipereducer.reduce()` 
 or `executeppr`. It executes pipeline tasks synchronously but offloads QA calculation and 
@@ -7,6 +6,10 @@ Weblog rendering to background Parsl tasks using the Checkpoint & Detach pattern
 """
 import os
 import logging
+import sqlite3
+import platform
+import datetime
+import parsl
 from parsl.app.app import python_app
 
 # Import pac-man config to initialize parsl
@@ -16,11 +19,60 @@ from pac_man.config import initialize_parsl
 LOG = logging.getLogger(__name__)
 
 
-@python_app(executors=['weblog_executor'])
-def async_qa_and_weblog(context_path: str, working_dir: str, previous_render_future=None):
+def _log_stage_execution(
+    db_path: str,
+    run_id: str,
+    stage_number: int,
+    task_name: str,
+    stage_label: str,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime | None,
+    status: str,
+) -> None:
+    """Records synchronous main-process pipeline compute stage events into monitoring database."""
+    try:
+        abs_db_path = os.path.abspath(db_path)
+        os.makedirs(os.path.dirname(abs_db_path), exist_ok=True)
+        conn = sqlite3.connect(abs_db_path, timeout=10.0)
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS stage_execution (
+                    run_id TEXT,
+                    stage_number INTEGER,
+                    task_name TEXT,
+                    stage_label TEXT,
+                    start_time TIMESTAMP,
+                    end_time TIMESTAMP,
+                    status TEXT,
+                    hostname TEXT
+                )
+            """)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT rowid FROM stage_execution WHERE run_id = ? AND stage_number = ?",
+                (run_id, stage_number),
+            )
+            row = cursor.fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE stage_execution SET end_time = ?, status = ? WHERE rowid = ?",
+                    (end_time, status, row[0]),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO stage_execution 
+                       (run_id, stage_number, task_name, stage_label, start_time, end_time, status, hostname)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (run_id, stage_number, task_name, stage_label, start_time, end_time, status, platform.node()),
+                )
+        conn.close()
+    except Exception as e:
+        LOG.debug("Failed to record stage telemetry: %s", e)
+
+
+def _execute_qa_and_weblog(context_path: str, working_dir: str) -> bool:
     """
-    Parsl Python App that runs in a background subprocess.
-    It waits for `previous_render_future` to prevent race conditions on global weblog files.
+    Core QA and Weblog execution logic run inside background Parsl worker subprocesses.
     """
     import os
     # Condor tasks run in a scratch directory. Change back to the project working dir IMMEDIATELY
@@ -52,12 +104,37 @@ def async_qa_and_weblog(context_path: str, working_dir: str, previous_render_fut
     # For logging purposes, extract stage number
     latest_stage_number = latest_result_proxy.stage_number if hasattr(latest_result_proxy, 'stage_number') else 'unknown'
     
+    # 1. Unpickle result, calculate QA in background, and persist back to disk
+    result = latest_result_proxy.read() if hasattr(latest_result_proxy, 'read') else latest_result_proxy
+    LOG.info(f"Background Task: Calculating QA for stage {latest_stage_number}")
+    pipelineqa.qa_registry.do_qa(context, result)
+    if hasattr(latest_result_proxy, 'write'):
+        latest_result_proxy.write(result)
+    
     # 2. Render the Weblog incrementally
     LOG.info(f"Background Task: Rendering Weblog for stage {latest_stage_number}")
     htmlrenderer.WebLogGenerator.render(context)
     
     LOG.info(f"Background Task: Finished QA and Weblog for stage {latest_stage_number}")
     return True
+
+
+def create_stage_qa_and_weblog_app(stage_name: str, fn=_execute_qa_and_weblog):
+    """
+    Factory creating a Parsl PythonApp dynamically named for the specific pipeline stage.
+    This ensures that Parsl's MonitoringHub records the actual stage name and number
+    (e.g., 'Stage_001_hifv_importdata') in the database rather than a generic function name.
+    """
+    def stage_task(context_path: str, working_dir: str, inputs=()):
+        return fn(context_path, working_dir)
+
+    stage_task.__name__ = stage_name
+    stage_task.__qualname__ = stage_name
+    return python_app(stage_task, executors=['weblog_executor'])
+
+
+# Backward compatibility alias
+async_qa_and_weblog = create_stage_qa_and_weblog_app("async_qa_and_weblog")
 
 
 def pac_man_reduce(
@@ -90,8 +167,13 @@ def pac_man_reduce(
 
     # 2. Initialize Parsl
     initialize_parsl(backend=backend)
+    dfk = parsl.dfk()
+    run_id = dfk.run_id
+    monitoring_endpoint = getattr(dfk.config.monitoring, 'logging_endpoint', 'sqlite:///runinfo/monitoring.db') or 'sqlite:///runinfo/monitoring.db'
+    monitoring_db_path = monitoring_endpoint.replace('sqlite:///', '')
     
     # 2. Neuter the synchronous pipeline slowdowns globally for the main thread!
+    basetask.DISABLE_QA = True
     basetask.DISABLE_WEBLOG = False
     # Instead of disabling plotting entirely, we monkey-patch the HTML renderer 
     # to be a no-op in the main process. This allows tasks to generate plots, 
@@ -148,6 +230,19 @@ def pac_man_reduce(
 
             LOG.info(f"\n{'='*60}\nPAC-MAN Executing Stage {procedure_stage_nr}: {task_name}\n{'='*60}")
             
+            stage_metadata = f"Stage_{procedure_stage_nr:03d}_{task_name}"
+            stage_start_time = datetime.datetime.now()
+            _log_stage_execution(
+                db_path=monitoring_db_path,
+                run_id=run_id,
+                stage_number=procedure_stage_nr,
+                task_name=task_name,
+                stage_label=f"{stage_metadata} [compute]",
+                start_time=stage_start_time,
+                end_time=None,
+                status="running",
+            )
+
             # Explicitly bypass the CLI wrapper and global context
             try:
                 from pipeline.infrastructure import task_registry, argmapper, vdp, utils
@@ -163,12 +258,33 @@ def pac_man_reduce(
                 result.taskname = task_name
                 result.accept(context)
 
+                _log_stage_execution(
+                    db_path=monitoring_db_path,
+                    run_id=run_id,
+                    stage_number=procedure_stage_nr,
+                    task_name=task_name,
+                    stage_label=f"{stage_metadata} [compute]",
+                    start_time=stage_start_time,
+                    end_time=datetime.datetime.now(),
+                    status="done",
+                )
+
                 tracebacks = utils.get_tracebacks(result)
                 if tracebacks:
                     previous_tracebacks_as_string = '\n'.join(tracebacks)
                     raise exceptions.PipelineException(previous_tracebacks_as_string)
 
             except Exception as e:
+                _log_stage_execution(
+                    db_path=monitoring_db_path,
+                    run_id=run_id,
+                    stage_number=procedure_stage_nr,
+                    task_name=task_name,
+                    stage_label=f"{stage_metadata} [compute]",
+                    start_time=stage_start_time,
+                    end_time=datetime.datetime.now(),
+                    status="failed",
+                )
                 LOG.error(f"Task {task_name} failed. Returning context early.")
                 import traceback
                 traceback.print_exc()
@@ -185,12 +301,21 @@ def pac_man_reduce(
 
             # 5. Launch Background QA and Weblog (Chaining the futures to prevent Race Conditions)
             LOG.info(f"PAC-MAN: Launching asynchronous QA & Weblog render for stage {result.stage_number}")
-            bg_future = async_qa_and_weblog(checkpoint_path, os.getcwd(), previous_render_future=last_background_future)
+            
+            # Pass the previous future into the special `inputs` kwarg to build a visualizable DAG edge
+            stage_metadata = f"Stage_{result.stage_number:03d}_{task_name}"
+            stage_app = create_stage_qa_and_weblog_app(stage_metadata)
+            
+            bg_future = stage_app(
+                checkpoint_path, 
+                os.getcwd(),
+                inputs=[last_background_future] if last_background_future else []
+            )
             
             background_futures.append(bg_future)
             last_background_future = bg_future
 
-            if result.stage_number is exitstage:
+            if result.stage_number == exitstage:
                 break
 
     except StopIteration:
@@ -206,7 +331,6 @@ def pac_man_reduce(
         LOG.info("PAC-MAN: All background tasks complete. Workflow finished!")
     
     # Gracefully shutdown Parsl engine to prevent dirty exit warnings
-    import parsl
     parsl.dfk().cleanup()
     
     return context
