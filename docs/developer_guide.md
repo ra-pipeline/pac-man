@@ -85,15 +85,15 @@ pixi run test
 This executes `pytest tests/` with local mock adapters and temporary directory fixtures, verifying process isolation, executor lifecycle management, and task wrappers.
 
 ### Integration & End-to-End Verification
-The shortcut task `pipeline-test` executes end-to-end reduction verification against standard pipeline datasets. Using `--manifest-path "${PACMAN_ROOT:-../..}"` supports running from repository subdirectories (like `proc/working/`) or arbitrary external paths:
+The shortcut task `pipeline-test` executes end-to-end reduction verification against standard pipeline datasets. Invoking it from the repository root automatically isolates execution in `working/` (you can also pass `--workdir` or use `--manifest-path "$PACMAN_ROOT"` from an external directory):
 
 ```bash
 # Verify dataset resolution and configuration without executing
-pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla --dry-run
-pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma --dry-run
+pixi run pipeline-test --telescope vla --dry-run
+pixi run pipeline-test --telescope alma --dry-run
 
 # Run reduction through stage N (e.g. stage 2) to test early pipeline execution
-pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla --exitstage 2
+pixi run pipeline-test --telescope vla --exitstage 2
 ```
 
 Dataset discovery relies on `casa_tools.utils.resolve()`, resolving standard pipeline regression and unit test datasets (such as `pl-regressiontest/...` and `pl-unittest/...`) registered in `~/.casa/config.py` `datapath`.

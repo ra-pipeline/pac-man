@@ -4,11 +4,17 @@
 Consolidated end-to-end test runner for ALMA and VLA pipeline reduction
 workflows with CASA data path discovery and configurable execution backends.
 
-Usage (from an isolated working directory):
-    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla
-    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma
-    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope alma --backend htcondor
-    pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --dry-run
+Usage:
+    # Directly from the repository (automatically routes execution into working/):
+    pixi run pipeline-test --telescope vla
+    pixi run pipeline-test --telescope alma --backend htcondor
+    pixi run pipeline-test --dry-run
+
+    # From an external directory:
+    pixi run --manifest-path "$PACMAN_ROOT" pipeline-test --telescope vla
+
+    # With a custom working directory:
+    pixi run pipeline-test --telescope vla --workdir /path/to/workdir
 """
 
 from __future__ import annotations
@@ -110,6 +116,7 @@ def run_pipeline(
     else:
         vis_path = resolve_dataset(spec.dataset_relpaths)
 
+    LOG.info("Working directory: %s", os.getcwd())
     LOG.info("Selected workflow: %s", telescope.upper())
     LOG.info("Dataset path: %s", vis_path)
     LOG.info("Procedure: %s", exec_procedure)
@@ -183,6 +190,12 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         help="Pipeline logging verbosity.",
     )
     parser.add_argument(
+        "-w",
+        "--workdir",
+        default=None,
+        help="Target working directory for execution (defaults to working/ if invoked from repo root).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Resolve and validate dataset paths and settings without executing reduction.",
@@ -196,11 +209,29 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(args: Sequence[str] | None = None):
     """Entry point for CLI execution."""
+    parsed = parse_args(args)
+
+    # Determine execution working directory:
+    # 1. Explicit --workdir CLI argument takes highest priority.
+    # 2. If invoked via Pixi from the repository root, route to working/ to prevent polluting the repo.
+    # 3. Otherwise, preserve the caller's initial invocation directory (INIT_CWD).
+    pixi_root = os.environ.get("PIXI_PROJECT_ROOT")
+    init_cwd = os.environ.get("INIT_CWD") or os.getcwd()
+
+    if parsed.workdir:
+        target_dir = os.path.abspath(parsed.workdir)
+    elif pixi_root and (os.path.abspath(init_cwd) == os.path.abspath(pixi_root)):
+        target_dir = os.path.join(pixi_root, "working")
+    else:
+        target_dir = os.path.abspath(init_cwd)
+
+    os.makedirs(target_dir, exist_ok=True)
+    os.chdir(target_dir)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    parsed = parse_args(args)
     return run_pipeline(
         telescope=parsed.telescope,
         backend=parsed.backend,
