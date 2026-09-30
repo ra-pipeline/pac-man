@@ -136,10 +136,12 @@ pixi run dashboard
 ```
 The dashboard runs at `http://localhost:8502` and automatically discovers telemetry from `working/runinfo/monitoring.db`.
 
-#### Live Dashboard Preview
+![PAC-MAN Execution Dashboard](assets/dashboard_preview.png)
 
-<details open>
-<summary><b>Interactive Telemetry Timeline</b> (hover over tasks to inspect duration, worker assignment, and status, or drag to zoom)</summary>
+#### Interactive Timeline Widget
+
+<details>
+<summary><b>Interactive Telemetry Timeline</b> (click to expand &mdash; hover over tasks to inspect duration, worker assignment, and status, or drag to zoom)</summary>
 
 <iframe src="assets/dashboard_timeline.html" width="100%" height="430px" frameborder="0" style="border: 1px solid #e0e0e0; border-radius: 6px; margin-top: 10px;"></iframe>
 

@@ -49,6 +49,8 @@ notes/
 
 # Logs
 casa-*.log
+casacalls*.txt
+casacalls-*.txt
 
 # Docs build output
 site/
