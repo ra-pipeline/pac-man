@@ -32,14 +32,14 @@ sequenceDiagram
 
 ## Quick Start
 
-Execute a pipeline test run using the CLI runner:
+Execute a pipeline test run from a working directory using `--manifest-path`:
 
 ```bash
 # Verify dataset resolution
-pixi run python scripts/test_pipeline.py --telescope vla --dry-run
+pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla --dry-run
 
 # Run reduction
-pixi run python scripts/test_pipeline.py --telescope vla
+pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla
 ```
 
 For configuration options, backend setups, and monitoring, see the [User Guide](user_guide.md).
