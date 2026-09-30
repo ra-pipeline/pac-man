@@ -20,8 +20,8 @@ pixi install
 # Run tests
 pixi run test
 
-# Run pipeline reduction test from a working directory
-pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla
+# Run pipeline reduction test (automatically isolated in working/)
+pixi run pipeline-test --telescope vla
 ```
 
 ## References & Citations

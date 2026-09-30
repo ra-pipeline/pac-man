@@ -32,14 +32,14 @@ sequenceDiagram
 
 ## Quick Start
 
-Execute a pipeline test run from a working directory using `--manifest-path`:
+Execute a pipeline test run directly from the repository (automatically isolated in `working/`):
 
 ```bash
 # Verify dataset resolution
-pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla --dry-run
+pixi run pipeline-test --telescope vla --dry-run
 
 # Run reduction
-pixi run --manifest-path "${PACMAN_ROOT:-../..}" pipeline-test --telescope vla
+pixi run pipeline-test --telescope vla
 ```
 
 For configuration options, backend setups, and monitoring, see the [User Guide](user_guide.md).
