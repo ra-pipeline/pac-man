@@ -53,6 +53,7 @@ pac-man = { path = ".", editable = true }
 [tasks]
 test = "PYTHONPATH=.:src:tests pytest tests/"
 visualize = "parsl-visualize"
-dashboard = "streamlit run scripts/dashboard.py --server.headless true --server.fileWatcherType none"
+dashboard = "streamlit run $PIXI_PROJECT_ROOT/scripts/dashboard.py --server.headless true --server.fileWatcherType none"
 pipeline-test = "python $PIXI_PROJECT_ROOT/scripts/test_pipeline.py"
+export-dashboard = "python $PIXI_PROJECT_ROOT/scripts/export_dashboard.py"
 
