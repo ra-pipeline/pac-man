@@ -3,6 +3,8 @@
 
 # Parsl execution logs
 runinfo/
+working/
+products/
 
 # Python
 __pycache__/
@@ -61,3 +63,15 @@ casarundata*
 
 # Processing directory
 proc/
+
+# Streamlit local settings
+.streamlit/
+
+# Secrets and local credentials
+.env
+.env.*
+*.token
+*.secret
+*.key
+*.pem
+
