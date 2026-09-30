@@ -12,5 +12,8 @@ nav = [
     { "References" = "references.md" },
 ]
 
+[project.extra]
+generator = false
+
 [project.theme]
 # Default Zensical Settings
