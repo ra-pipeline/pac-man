@@ -30,6 +30,20 @@ sequenceDiagram
 4. **Chained Weblog Writes**: Each stage's background task receives the future of the previous stage's rendering task via `inputs=[last_background_future]`. [Parsl](https://parsl.readthedocs.io/) enforces sequential execution across weblog tasks, preventing concurrent write collisions on `html/index.html`.
 5. **Product Packaging Synchronization**: Stages that archive the weblog (e.g., `hifa_exportdata`, `hifv_exportdata`, `hif_exportdata`) block on in-flight background futures before execution, ensuring the packaged tarball contains all rendered stage reports.
 
+## Quick Start
+
+Execute a pipeline test run using the CLI runner:
+
+```bash
+# Verify dataset resolution
+pixi run python scripts/test_pipeline.py --telescope vla --dry-run
+
+# Run reduction
+pixi run python scripts/test_pipeline.py --telescope vla
+```
+
+For configuration options, backend setups, and monitoring, see the [User Guide](user_guide.md).
+
 ## References & Documentation
 
 - [Parsl Documentation](https://parsl.readthedocs.io/) &mdash; [Babuji et al. (2019)](https://doi.org/10.1145/3307681.3325400)

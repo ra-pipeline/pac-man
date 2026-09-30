@@ -5,12 +5,12 @@ site_author = "Rui Xue"
 site_url = "https://ra-pipeline.github.io/pac-man/"
 copyright = "Copyright &copy; 2026 /rx"
 
+nav = [
+    { "Home" = "index.md" },
+    { "User Guide" = "user_guide.md" },
+    { "Developer Guide" = "developer_guide.md" },
+    { "References" = "references.md" },
+]
+
 [project.theme]
 # Default Zensical Settings
-
-[project.nav]
-"Home" = "index.md"
-"User Guide" = "user_guide.md"
-"Developer Guide" = "developer_guide.md"
-"References" = "references.md"
-

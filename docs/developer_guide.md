@@ -73,7 +73,33 @@ Plot generation tasks (such as `plotms`) require a valid X11 display. In cluster
 - Sets `QT_X11_NO_MITSHM=1` to bypass shared memory restrictions in containerized or cgroup-constrained nodes.
 - Sets `OMP_NUM_THREADS=1` to prevent OpenMP thread deadlocks.
 
+## 5. Testing & Verification
+
+PAC-MAN incorporates unit testing and pipeline reduction verification across local and cluster environments:
+
+### Unit Tests
+Run offline unit tests via Pixi:
+```bash
+pixi run test
+```
+This executes `pytest tests/` with local mock adapters and temporary directory fixtures, verifying process isolation, executor lifecycle management, and task wrappers.
+
+### Integration & End-to-End Verification
+The runner script `scripts/test_pipeline.py` supports end-to-end reduction verification against standard pipeline datasets:
+
+```bash
+# Verify dataset resolution and configuration without executing
+pixi run python scripts/test_pipeline.py --telescope vla --dry-run
+pixi run python scripts/test_pipeline.py --telescope alma --dry-run
+
+# Run reduction through stage N (e.g. stage 2) to test early pipeline execution
+pixi run python scripts/test_pipeline.py --telescope vla --exitstage 2
+```
+
+Dataset discovery relies on `casa_tools.utils.resolve()`, resolving standard pipeline regression and unit test datasets (such as `pl-regressiontest/...` and `pl-unittest/...`) registered in `~/.casa/config.py` `datapath`.
+
 ## References
 
 For full citation keys, BibTeX records, and upstream manual links, refer to the [References & Citations](references.md) guide.
+
 
