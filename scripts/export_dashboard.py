@@ -10,8 +10,11 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+
 import pandas as pd
 import plotly.express as px
+
+from pac_man.telemetry import TASK_COLOR_MAP, format_task_label
 
 SYNTHETIC_TASKS = [
     {
@@ -174,16 +177,16 @@ def load_telemetry_from_db(db_path: str) -> pd.DataFrame:
         conn.close()
 
     if not parsl_df.empty:
-        parsl_df["task_func_name"] = parsl_df["task_func_name"].apply(
-            lambda n: n if ("[weblog]" in n or "[compute]" in n) else f"{n} [weblog]"
+        parsl_df["task_func_name"] = parsl_df.apply(
+            lambda r: format_task_label(r["task_func_name"], str(r.get("task_executor", ""))), axis=1
         )
 
     tasks_df = pd.concat([compute_df, parsl_df], ignore_index=True)
     if tasks_df.empty:
         return pd.DataFrame()
 
-    tasks_df["Start"] = pd.to_datetime(tasks_df["task_try_time_launched"])
-    tasks_df["Finish"] = pd.to_datetime(tasks_df["task_try_time_returned"]).fillna(pd.Timestamp.now())
+    tasks_df["Start"] = pd.to_datetime(tasks_df["task_try_time_launched"], format="mixed", utc=True)
+    tasks_df["Finish"] = pd.to_datetime(tasks_df["task_try_time_returned"], format="mixed", utc=True).fillna(pd.Timestamp.now(tz="UTC"))
     tasks_df["duration_s"] = (tasks_df["Finish"] - tasks_df["Start"]).dt.total_seconds().round(1)
     return tasks_df
 
@@ -197,16 +200,13 @@ def build_timeline_figure(tasks_df: pd.DataFrame) -> px.timeline:
         y="task_func_name",
         color="task_executor",
         hover_data=["task_id", "task_status", "duration_s", "hostname"],
-        color_discrete_map={
-            "main_process": "#0d6efd",
-            "weblog_executor": "#6ea8fe",
-        },
+        color_discrete_map=TASK_COLOR_MAP,
     )
     fig.update_yaxes(autorange="reversed", title_text="")
     fig.update_xaxes(title_text="Timeline")
     fig.update_layout(
-        margin=dict(l=10, r=10, t=10, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin={"l": 10, "r": 10, "t": 10, "b": 10},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
         height=400,
     )
     return fig

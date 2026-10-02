@@ -1,9 +1,10 @@
-import streamlit as st
-import pandas as pd
-import sqlite3
-import plotly.express as px
-import sys
 import os
+import sqlite3
+import sys
+
+import pandas as pd
+import plotly.express as px
+import streamlit as st
 
 st.set_page_config(layout="wide", page_title="PAC-MAN Dashboard")
 
@@ -129,19 +130,28 @@ try:
 except Exception:
     pass
 
+from pac_man.telemetry import TASK_COLOR_MAP, format_task_label
+
 if not parsl_tasks_df.empty:
-    parsl_tasks_df['task_func_name'] = parsl_tasks_df['task_func_name'].apply(
-        lambda n: n if ('[weblog]' in n or '[compute]' in n) else f"{n} [weblog]"
+    parsl_tasks_df['task_func_name'] = parsl_tasks_df.apply(
+        lambda r: format_task_label(r['task_func_name'], str(r.get('task_executor', ''))), axis=1
     )
 
 tasks_df = pd.concat([compute_df, parsl_tasks_df], ignore_index=True)
 
 if not tasks_df.empty:
-    tasks_df['Start'] = pd.to_datetime(tasks_df['task_try_time_launched'])
-    tasks_df['Finish'] = pd.to_datetime(tasks_df['task_try_time_returned']).fillna(pd.Timestamp.now())
+    tasks_df['Start'] = pd.to_datetime(tasks_df['task_try_time_launched'], format='mixed', utc=True)
+    tasks_df['Finish'] = pd.to_datetime(tasks_df['task_try_time_returned'], format='mixed', utc=True).fillna(pd.Timestamp.now(tz='UTC'))
     tasks_df['duration_s'] = (tasks_df['Finish'] - tasks_df['Start']).dt.total_seconds().round(1)
-    fig = px.timeline(tasks_df, x_start="Start", x_end="Finish", y="task_func_name",
-                      color="task_executor", hover_data=["task_id", "task_status", "duration_s", "hostname"])
+    fig = px.timeline(
+        tasks_df,
+        x_start="Start",
+        x_end="Finish",
+        y="task_func_name",
+        color="task_executor",
+        color_discrete_map=TASK_COLOR_MAP,
+        hover_data=["task_id", "task_status", "duration_s", "hostname"],
+    )
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 else:
@@ -163,8 +173,8 @@ except Exception:
     pass
 
 if not raw_parsl_df.empty:
-    raw_parsl_df['task_func_name'] = raw_parsl_df['task_func_name'].apply(
-        lambda n: n if ('[weblog]' in n or '[compute]' in n) else f"{n} [weblog]"
+    raw_parsl_df['task_func_name'] = raw_parsl_df.apply(
+        lambda r: format_task_label(r['task_func_name'], str(r.get('task_executor', ''))), axis=1
     )
 
 raw_compute_df = pd.DataFrame()
@@ -185,5 +195,6 @@ except Exception:
 
 detail_df = pd.concat([raw_compute_df, raw_parsl_df], ignore_index=True)
 if not detail_df.empty:
+    detail_df['task_time_invoked'] = pd.to_datetime(detail_df['task_time_invoked'], format='mixed', utc=True)
     detail_df = detail_df.sort_values(by=['task_time_invoked'])
 st.dataframe(detail_df, use_container_width=True)

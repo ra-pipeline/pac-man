@@ -61,8 +61,11 @@ pixi run pipeline-test --telescope vla
 # Run ALMA reduction with HTCondor backend
 pixi run pipeline-test --telescope alma --backend htcondor
 
+# Run ALMA 3-EB parallel import test (2019.1.00847.S / PIPE-2013)
+pixi run pipeline-test --telescope alma-3eb
+
 # Dry-run validation (checks dataset discovery and configuration without executing)
-pixi run pipeline-test --telescope alma --dry-run
+pixi run pipeline-test --telescope alma-3eb --dry-run
 ```
 
 All CASA logs, checkpoints, and intermediate products are generated locally in `working/`, keeping the repository root clean.
@@ -86,13 +89,13 @@ pixi run --manifest-path "$PACMAN_ROOT" pipeline-test --telescope vla
 
 Supported CLI options:
 
-- `-t, --telescope`: Target telescope (`vla` or `alma`). Default: `vla`. Can also be passed positionally.
+- `-t, --telescope`: Target workflow (`vla`, `alma`, or multi-EB import test `alma-3eb` / alias `3eb`). Default: `vla`. Can also be passed positionally.
 - `-b, --backend`: Parsl execution backend (`subprocess`, `htcondor`, `slurm`, `threads`). Default: `subprocess`.
 - `-w, --workdir`: Target working directory for execution. Defaults to `working/` if invoked from the repository root.
-- `--vis`: File path or relative CASA data path to a custom MeasurementSet.
+- `--vis`: One or more custom MeasurementSet or ASDM paths to reduce (supports multiple inputs for parallel import testing).
 - `-p, --procedure`: Pipeline recipe XML filename or path.
 - `--exitstage`: Stage number at which to stop execution.
-- `--dry-run`: Resolves dataset and validates parameters without executing reduction.
+- `--dry-run`: Resolves dataset(s) and validates parameters without executing reduction.
 - `--loglevel`: Logging verbosity (`debug`, `info`, `warning`, `error`). Default: `info`.
 
 ## 3. Real-Time Monitoring
