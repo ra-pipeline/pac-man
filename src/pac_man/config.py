@@ -1,13 +1,14 @@
 import os
 from pathlib import Path
+
 import parsl
-from parsl.config import Config
-from parsl.executors import ThreadPoolExecutor, HighThroughputExecutor
-from parsl.providers import LocalProvider, CondorProvider, SlurmProvider
 from parsl.addresses import address_by_hostname
+from parsl.config import Config
+from parsl.executors import HighThroughputExecutor, ThreadPoolExecutor
 from parsl.launchers.base import Launcher
 from parsl.monitoring.monitoring import MonitoringHub
 from parsl.monitoring.radios.udp import UDPRadio
+from parsl.providers import CondorProvider, LocalProvider, SlurmProvider
 
 _PACKAGE_SRC = str(Path(__file__).resolve().parent.parent)
 
@@ -41,39 +42,59 @@ class XvfbLauncher(Launcher):
 
 
 def get_local_threads_config() -> Config:
-    """
-    Returns a Parsl Config using local Python threads. 
+    """Returns a Parsl Config using local Python threads.
+
     WARNING: Not safe for CASA execution as CASA is not thread-safe.
     """
     return Config(
         executors=[
             ThreadPoolExecutor(
                 max_threads=4,
+                label='tier0_executor',
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
+            ),
+            ThreadPoolExecutor(
+                max_threads=2,
+                label='weblog_executor',
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
+            ),
+            ThreadPoolExecutor(
+                max_threads=4,
                 label='local_threads',
-                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
-            )
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
+            ),
         ],
-        monitoring=get_monitoring_hub()
+        monitoring=get_monitoring_hub(),
     )
 
-def get_local_subprocess_config() -> Config:
-    """
-    Returns a Parsl Config using local subprocesses. 
+def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: int = 2) -> Config:
+    """Returns a Parsl Config using local subprocesses.
+
     Safe for CASA execution since each task gets its own memory space.
+    Provides dedicated pools for Tier0 pipeline compute and background Weblog rendering.
     """
     return Config(
         executors=[
             HighThroughputExecutor(
-                label='weblog_executor',
-                max_workers_per_node=4,
+                label='tier0_executor',
+                max_workers_per_node=max_tier0_workers,
                 provider=LocalProvider(
                     init_blocks=1,
-                    max_blocks=1
+                    max_blocks=1,
                 ),
-                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
-            )
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
+            ),
+            HighThroughputExecutor(
+                label='weblog_executor',
+                max_workers_per_node=max_weblog_workers,
+                provider=LocalProvider(
+                    init_blocks=1,
+                    max_blocks=1,
+                ),
+                remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
+            ),
         ],
-        monitoring=get_monitoring_hub()
+        monitoring=get_monitoring_hub(),
     )
 
 def get_condor_config(max_tier0_workers: int = 50, max_weblog_workers: int = 2) -> Config:
@@ -133,23 +154,28 @@ def get_slurm_config() -> Config:
         monitoring=get_monitoring_hub()
     )
 
-def initialize_parsl(backend: str = "subprocess", max_tier0_workers: int = 50, max_weblog_workers: int = 2):
-    """
-    Initializes Parsl with the appropriate configuration.
-    
+def initialize_parsl(backend: str = "subprocess", max_tier0_workers: int | None = None, max_weblog_workers: int = 2):
+    """Initializes Parsl with the appropriate configuration.
+
     Args:
-        backend (str): The execution backend to use. 
-                       Options: "threads", "subprocess", "htcondor", "slurm"
+        backend: The execution backend to use ("threads", "subprocess", "htcondor", "slurm").
+        max_tier0_workers: Maximum workers for tier0 tasks (default: 4 for subprocess, 50 for htcondor).
+        max_weblog_workers: Maximum workers for background weblog rendering.
     """
     if backend == "threads":
         config = get_local_threads_config()
     elif backend == "subprocess":
-        config = get_local_subprocess_config()
+        effective_tier0 = 4 if max_tier0_workers is None else max_tier0_workers
+        config = get_local_subprocess_config(
+            max_tier0_workers=effective_tier0,
+            max_weblog_workers=max_weblog_workers,
+        )
     elif backend == "htcondor":
-        config = get_condor_config(max_tier0_workers=max_tier0_workers, max_weblog_workers=max_weblog_workers)
+        effective_tier0 = 50 if max_tier0_workers is None else max_tier0_workers
+        config = get_condor_config(max_tier0_workers=effective_tier0, max_weblog_workers=max_weblog_workers)
     elif backend == "slurm":
         config = get_slurm_config()
     else:
         raise ValueError(f"Unknown Parsl backend requested: {backend}. Choose from: threads, subprocess, htcondor, slurm")
-        
+
     parsl.load(config)

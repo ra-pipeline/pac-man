@@ -4,11 +4,12 @@ This script provides a drop-in replacement for the standard pipeline's `recipere
 or `executeppr`. It executes pipeline tasks synchronously but offloads QA calculation and 
 Weblog rendering to background Parsl tasks using the Checkpoint & Detach pattern.
 """
-import os
-import logging
-import sqlite3
-import platform
 import datetime
+import logging
+import os
+import platform
+import sqlite3
+
 import parsl
 from parsl.app.app import python_app
 
@@ -47,6 +48,9 @@ def _log_stage_execution(
                     hostname TEXT
                 )
             """)
+            start_time_val = start_time.isoformat() if isinstance(start_time, datetime.datetime) else start_time
+            end_time_val = end_time.isoformat() if isinstance(end_time, datetime.datetime) else end_time
+
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT rowid FROM stage_execution WHERE run_id = ? AND stage_number = ?",
@@ -56,37 +60,93 @@ def _log_stage_execution(
             if row:
                 conn.execute(
                     "UPDATE stage_execution SET end_time = ?, status = ? WHERE rowid = ?",
-                    (end_time, status, row[0]),
+                    (end_time_val, status, row[0]),
                 )
             else:
                 conn.execute(
                     """INSERT INTO stage_execution 
                        (run_id, stage_number, task_name, stage_label, start_time, end_time, status, hostname)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (run_id, stage_number, task_name, stage_label, start_time, end_time, status, platform.node()),
+                    (run_id, stage_number, task_name, stage_label, start_time_val, end_time_val, status, platform.node()),
                 )
         conn.close()
     except Exception as e:
         LOG.debug("Failed to record stage telemetry: %s", e)
 
 
-def _execute_qa_and_weblog(context_path: str, working_dir: str) -> bool:
+def _configure_casalog(
+    casalog_file: str | None = None,
+    log2term: bool | None = None,
+) -> tuple[str | None, bool | None]:
+    """Configure casaconfig and synchronize casa_tools.casalog without deleting previous logs.
+
+    Args:
+        casalog_file: Target log file path.
+        log2term: Whether to print log output to terminal/console.
+
+    Returns:
+        Tuple of (effective_logfile_path, effective_log2term_setting).
     """
-    Core QA and Weblog execution logic run inside background Parsl worker subprocesses.
-    """
+    effective_log = None
+    effective_log2term = None
+
+    if casalog_file or log2term is not None:
+        try:
+            from casaconfig import config
+
+            if casalog_file:
+                config.logfile = os.path.abspath(casalog_file)
+            if log2term is not None:
+                config.log2term = bool(log2term)
+            effective_log = getattr(config, "logfile", None)
+            effective_log2term = getattr(config, "log2term", None)
+        except ImportError:
+            pass
+        except Exception as e:
+            LOG.debug("Error updating casaconfig: %s", e)
+
+    target_log = effective_log or (os.path.abspath(casalog_file) if casalog_file else None)
+    target_log2term = effective_log2term if effective_log2term is not None else log2term
+
+    try:
+        from pipeline.infrastructure import casa_tools
+
+        if target_log:
+            cur_log = casa_tools.casalog.logfile()
+            if cur_log != target_log:
+                casa_tools.casalog.setlogfile(target_log)
+        if target_log2term is not None:
+            casa_tools.casalog.showconsole(bool(target_log2term))
+    except Exception as e:
+        LOG.debug("Error synchronizing casa_tools.casalog: %s", e)
+
+    return target_log, target_log2term
+
+
+def _execute_qa_and_weblog(
+    context_path: str,
+    working_dir: str,
+    casalog_file: str | None = None,
+    log2term: bool | None = None,
+) -> bool:
+    """Core QA and Weblog execution logic run inside background Parsl worker subprocesses."""
     import os
+
     # Condor tasks run in a scratch directory. Change back to the project working dir IMMEDIATELY
     # before importing pipeline modules, as CASA initializes its logfiles upon import.
     os.chdir(working_dir)
 
+    # Configure casaconfig and synchronize casalog before importing pipeline modules
+    _configure_casalog(casalog_file=casalog_file, log2term=log2term)
+
     import logging
-    import pipeline.cli as cli
-    import pipeline.infrastructure.pipelineqa as pipelineqa
+
+    from pipeline import cli
+    from pipeline.infrastructure import basetask, pipelineqa
     from pipeline.infrastructure.renderer import htmlrenderer
-    import pipeline.infrastructure.basetask as basetask
-    
+
     LOG = logging.getLogger(__name__)
-    LOG.info(f"Background Task: Loading checkpoint from {context_path}")
+    LOG.info("Background Task: Loading checkpoint from %s", context_path)
 
     # Re-enable QA and Weblog for THIS isolated subprocess
     basetask.DISABLE_QA = False
@@ -125,8 +185,8 @@ def create_stage_qa_and_weblog_app(stage_name: str, fn=_execute_qa_and_weblog):
     This ensures that Parsl's MonitoringHub records the actual stage name and number
     (e.g., 'Stage_001_hifv_importdata') in the database rather than a generic function name.
     """
-    def stage_task(context_path: str, working_dir: str, inputs=()):
-        return fn(context_path, working_dir)
+    def stage_task(context_path: str, working_dir: str, casalog_file: str | None = None, log2term: bool | None = None, inputs=()):
+        return fn(context_path, working_dir, casalog_file=casalog_file, log2term=log2term)
 
     stage_task.__name__ = stage_name
     stage_task.__qualname__ = stage_name
@@ -149,30 +209,50 @@ def pac_man_reduce(
         exitstage: int | None = None,
         startstage: int | None = None,
         backend: str = 'subprocess',
-        max_tier0_workers: int = 50,
-        max_weblog_workers: int = 2
+        max_tier0_workers: int | None = None,
+        max_weblog_workers: int = 2,
+        casalog: str | None = None,
+        log2term: bool | None = None,
 ):
-    """
-    Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
-    
+    """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
+
     Args:
-        max_tier0_workers: Maximum number of HTC Condor nodes to allocate for pipeline Tier0 execution.
-        max_weblog_workers: Maximum number of Condor nodes to allocate for background weblog rendering.
+        vis: Optional input MeasurementSets/ASDMs.
+        infiles: Optional input single-dish files.
+        procedure: Pipeline recipe XML procedure filename or path.
+        context: Optional preexisting pipeline context.
+        name: Optional context name.
+        loglevel: Logging verbosity ('debug', 'info', 'warning', 'error').
+        plotlevel: Plot generation level ('default', 'summary', 'all').
+        session: Optional session list.
+        exitstage: Optional stage number at which to stop execution.
+        startstage: Optional stage number at which to start execution.
+        backend: Parsl execution backend ('subprocess', 'htcondor', 'slurm', 'threads').
+        max_tier0_workers: Maximum workers to allocate for pipeline Tier0 execution.
+        max_weblog_workers: Maximum workers to allocate for background weblog rendering.
+        casalog: Optional custom CASA log file path to aggregate all logging into a single file.
+        log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
+    # Configure casaconfig and synchronize casalog BEFORE importing pipeline modules
+    main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
+
     # 1. Pipeline imports (Localizing them here prevents Condor workers from triggering
     # CASA initialization when unpickling the runner module)
-    import pipeline.infrastructure.basetask as basetask
-    import pipeline.cli as cli
-    from pipeline import recipereducer
+    from pipeline import cli, recipereducer
+    from pipeline.infrastructure import basetask
 
     # 2. Initialize Parsl
-    initialize_parsl(backend=backend)
+    initialize_parsl(
+        backend=backend,
+        max_tier0_workers=max_tier0_workers,
+        max_weblog_workers=max_weblog_workers,
+    )
     dfk = parsl.dfk()
     run_id = dfk.run_id
     monitoring_endpoint = getattr(dfk.config.monitoring, 'logging_endpoint', 'sqlite:///runinfo/monitoring.db') or 'sqlite:///runinfo/monitoring.db'
     monitoring_db_path = monitoring_endpoint.replace('sqlite:///', '')
     
-    # 2. Neuter the synchronous pipeline slowdowns globally for the main thread!
+    # 3. Neuter synchronous pipeline slowdowns for the orchestrator thread
     basetask.DISABLE_QA = True
     basetask.DISABLE_WEBLOG = False
     # Instead of disabling plotting entirely, we monkey-patch the HTML renderer 
@@ -181,6 +261,32 @@ def pac_man_reduce(
     from pipeline.infrastructure.renderer import htmlrenderer
     htmlrenderer.WebLogGenerator.render = lambda context: None
     LOG.info("PAC-MAN: Monkey-patched WebLogGenerator to defer HTML generation to background.")
+
+    # PIPE-3269: Ensure VDPTaskFactory creates a pickled context for tier0 Parsl tasks
+    # when running without mpi/dask clients.
+    try:
+        from pipeline.infrastructure import parslhelpers, sessionutils
+
+        if not getattr(sessionutils.VDPTaskFactory, "_pacman_patched", False):
+            _orig_vdp_enter = sessionutils.VDPTaskFactory.__enter__
+
+            def _vdp_task_factory_enter(self):
+                _orig_vdp_enter(self)
+                if parslhelpers.is_parsl_ready() and not getattr(self, '_VDPTaskFactory__context_path', None):
+                    import tempfile
+                    context = self._VDPTaskFactory__context
+                    self._VDPTaskFactory__context_path = tempfile.mktemp(
+                        suffix='.context',
+                        dir=context.output_dir,
+                    )
+                    context.save(self._VDPTaskFactory__context_path)
+                return self
+
+            sessionutils.VDPTaskFactory.__enter__ = _vdp_task_factory_enter
+            sessionutils.VDPTaskFactory._pacman_patched = True
+            LOG.info("PAC-MAN: Monkey-patched VDPTaskFactory to guarantee context serialization for Parsl.")
+    except Exception as e:
+        LOG.debug("Could not apply VDPTaskFactory monkey patch: %s", e)
 
     if vis is None: vis = []
     if infiles is None: infiles = []
@@ -221,17 +327,16 @@ def pac_man_reduce(
             
             # ExportData must package the Weblog. We MUST wait for all background weblog renders
             # to finish before we allow ExportData to run, otherwise it will package an incomplete weblog.
-            if task_name in ['hifa_exportdata', 'hifv_exportdata', 'hif_exportdata']:
-                if background_futures:
-                    LOG.info(f"PAC-MAN: Waiting for all background Weblog renders to finish before {task_name}...")
-                    for f in background_futures:
-                        f.result()
-                    LOG.info(f"PAC-MAN: Background Weblogs finished. Proceeding with {task_name}.")
+            if task_name in ['hifa_exportdata', 'hifv_exportdata', 'hif_exportdata'] and background_futures:
+                LOG.info(f"PAC-MAN: Waiting for all background Weblog renders to finish before {task_name}...")
+                for f in background_futures:
+                    f.result()
+                LOG.info(f"PAC-MAN: Background Weblogs finished. Proceeding with {task_name}.")
 
             LOG.info(f"\n{'='*60}\nPAC-MAN Executing Stage {procedure_stage_nr}: {task_name}\n{'='*60}")
             
             stage_metadata = f"Stage_{procedure_stage_nr:03d}_{task_name}"
-            stage_start_time = datetime.datetime.now()
+            stage_start_time = datetime.datetime.now(datetime.timezone.utc)
             _log_stage_execution(
                 db_path=monitoring_db_path,
                 run_id=run_id,
@@ -245,8 +350,13 @@ def pac_man_reduce(
 
             # Explicitly bypass the CLI wrapper and global context
             try:
-                from pipeline.infrastructure import task_registry, argmapper, vdp, utils
-                from pipeline.infrastructure import exceptions
+                from pipeline.infrastructure import (
+                    argmapper,
+                    exceptions,
+                    task_registry,
+                    utils,
+                    vdp,
+                )
 
                 pipeline_task_class = task_registry.get_pipeline_class_for_task(task_name)
                 mapped_args = argmapper.convert_args(pipeline_task_class, task_args)
@@ -265,7 +375,7 @@ def pac_man_reduce(
                     task_name=task_name,
                     stage_label=f"{stage_metadata} [compute]",
                     start_time=stage_start_time,
-                    end_time=datetime.datetime.now(),
+                    end_time=datetime.datetime.now(datetime.timezone.utc),
                     status="done",
                 )
 
@@ -274,7 +384,7 @@ def pac_man_reduce(
                     previous_tracebacks_as_string = '\n'.join(tracebacks)
                     raise exceptions.PipelineException(previous_tracebacks_as_string)
 
-            except Exception as e:
+            except Exception:
                 _log_stage_execution(
                     db_path=monitoring_db_path,
                     run_id=run_id,
@@ -282,7 +392,7 @@ def pac_man_reduce(
                     task_name=task_name,
                     stage_label=f"{stage_metadata} [compute]",
                     start_time=stage_start_time,
-                    end_time=datetime.datetime.now(),
+                    end_time=datetime.datetime.now(datetime.timezone.utc),
                     status="failed",
                 )
                 LOG.error(f"Task {task_name} failed. Returning context early.")
@@ -309,6 +419,8 @@ def pac_man_reduce(
             bg_future = stage_app(
                 checkpoint_path, 
                 os.getcwd(),
+                casalog_file=main_casalog_file,
+                log2term=main_log2term,
                 inputs=[last_background_future] if last_background_future else []
             )
             
