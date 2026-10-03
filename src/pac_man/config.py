@@ -33,12 +33,9 @@ class XvfbLauncher(Launcher):
         super().__init__(debug=debug)
 
     def __call__(self, command: str, tasks_per_node: int, nodes_per_block: int, script_dir: str = "") -> str:
-        # -a: Automatically find a free server number
-        # -s: Pass arguments to Xvfb (e.g. screen resolution)
-        # We use `env -u DBUS_SESSION_BUS_ADDRESS` to prevent plotms from connecting to the interactive session's DBus when getenv=true in Condor.
-        # We also set QT_X11_NO_MITSHM=1 because HTCondor restricts /dev/shm which causes Qt apps to deadlock when drawing to Xvfb.
-        # OMP_NUM_THREADS=1 prevents openMP thread deadlocks in restricted Condor cgroups.
-        return f"env -u DBUS_SESSION_BUS_ADDRESS QT_X11_NO_MITSHM=1 OMP_NUM_THREADS=1 xvfb-run -a -s '-screen 0 1024x768x24' {command}"
+        # -a: find a free server number; QT_X11_NO_MITSHM=1 prevents Qt deadlock on /dev/shm-restricted Condor nodes.
+        # DBUS and OMP are already set by WORKER_THREAD_LIMIT_ENV via worker_init; -u here is belt-and-suspenders for xvfb subprocesses.
+        return f"env -u DBUS_SESSION_BUS_ADDRESS QT_X11_NO_MITSHM=1 xvfb-run -a -s '-screen 0 1024x768x24' {command}"
 
 
 def get_local_threads_config() -> Config:
@@ -67,6 +64,13 @@ def get_local_threads_config() -> Config:
         monitoring=get_monitoring_hub(),
     )
 
+# Prevent casaplotms/Qt from connecting to the SSH-forwarded DBus, which causes hangs on headless workers.
+WORKER_THREAD_LIMIT_ENV = (
+    "export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 "
+    "VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 DBUS_SESSION_BUS_ADDRESS=/dev/null"
+)
+
+
 def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: int = 2) -> Config:
     """Returns a Parsl Config using local subprocesses.
 
@@ -81,6 +85,7 @@ def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: 
                 provider=LocalProvider(
                     init_blocks=1,
                     max_blocks=1,
+                    worker_init=WORKER_THREAD_LIMIT_ENV,
                 ),
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
@@ -90,6 +95,7 @@ def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: 
                 provider=LocalProvider(
                     init_blocks=1,
                     max_blocks=1,
+                    worker_init=WORKER_THREAD_LIMIT_ENV,
                 ),
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
@@ -114,7 +120,7 @@ def get_condor_config(max_tier0_workers: int = 50, max_weblog_workers: int = 2) 
                     init_blocks=1,
                     min_blocks=0,
                     max_blocks=max_tier0_workers, # Dynamically scales up to this limit based on queued tasks
-                    worker_init=f"export PATH={os.environ.get('PATH', '')}:$PATH && export PYTHONPATH={_PACKAGE_SRC}:$PYTHONPATH",
+                    worker_init=f"{WORKER_THREAD_LIMIT_ENV} && export PATH={os.environ.get('PATH', '')}:$PATH && export PYTHONPATH={_PACKAGE_SRC}:$PYTHONPATH",
                     scheduler_options="getenv = true\nrequest_memory = 32768\n" # Heavy tasks get 32GB RAM
                 ),
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
@@ -127,7 +133,7 @@ def get_condor_config(max_tier0_workers: int = 50, max_weblog_workers: int = 2) 
                     init_blocks=1,
                     min_blocks=0,
                     max_blocks=max_weblog_workers, # Renderers don't need to scale infinitely
-                    worker_init=f"export PATH={os.environ.get('PATH', '')}:$PATH && export PYTHONPATH={_PACKAGE_SRC}:$PYTHONPATH",
+                    worker_init=f"{WORKER_THREAD_LIMIT_ENV} && export PATH={os.environ.get('PATH', '')}:$PATH && export PYTHONPATH={_PACKAGE_SRC}:$PYTHONPATH",
                     scheduler_options="getenv = true\nrequest_memory = 8192\n" # Weblogs only need 8GB RAM
                 ),
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0)
@@ -147,6 +153,7 @@ def get_slurm_config() -> Config:
                     partition='compute', # Update with correct partition if needed
                     init_blocks=1,
                     max_blocks=10,
+                    worker_init=WORKER_THREAD_LIMIT_ENV,
                 ),
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=55055)
             )
@@ -162,6 +169,9 @@ def initialize_parsl(backend: str = "subprocess", max_tier0_workers: int | None 
         max_tier0_workers: Maximum workers for tier0 tasks (default: 4 for subprocess, 50 for htcondor).
         max_weblog_workers: Maximum workers for background weblog rendering.
     """
+    for var in ["OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"]:
+        os.environ.setdefault(var, "1")
+
     if backend == "threads":
         config = get_local_threads_config()
     elif backend == "subprocess":
