@@ -1,0 +1,77 @@
+# ==============================================================================
+# PAC-MAN Pipeline Configuration Template (TOML)
+# ==============================================================================
+# Select profile via CLI:
+#   pac-man --config config.example.toml --profile default
+#   pac-man --config config.example.toml --profile alma_ppr
+#   pac-man --config config.example.toml --profile vla_ppr
+#   pac-man --config config.example.toml --profile vla_recipe
+# ==============================================================================
+
+# Default profile targeted when --profile / -p is omitted
+default_profile = "default"
+
+# ------------------------------------------------------------------------------
+# 1. Base Runtime Defaults
+# ------------------------------------------------------------------------------
+[profiles.default]
+description = "Baseline runtime settings"
+backend = "subprocess"            # Parsl backend: 'subprocess', 'htcondor', 'slurm', 'threads'
+workdir = "working/"              # Working directory for pipeline execution
+loglevel = "info"                 # Logging verbosity: 'debug', 'info', 'warning', 'error'
+plotlevel = "default"             # Plot level: 'default', 'summary', 'all'
+log2term = true                   # Print CASA log output to terminal
+max_tier0_workers = 0             # Maximum concurrent workers for pipeline stages (0 for automatic)
+max_weblog_workers = 2            # Maximum concurrent workers for background weblog rendering
+omp_num_threads = "1"             # OMP/BLAS thread limit per worker process
+
+# ------------------------------------------------------------------------------
+# 2. ALMA Pipeline Processing Request (PPR)
+# ------------------------------------------------------------------------------
+[profiles.alma_ppr]
+inherits = "default"
+description = "ALMA standard pipeline execution via PPR XML"
+mode = "ppr"
+telescope = "alma"
+ppr = "rawdata/PPR.xml"           # Path to PPR XML file
+importonly = false                # Stop processing after data import stage
+bp_name = "breakpoint"            # Name of task treated as breakpoint
+bpaction = "ignore"               # Breakpoint action: 'ignore', 'break', 'resume'
+
+# ------------------------------------------------------------------------------
+# 3. VLA Pipeline Processing Request (PPR)
+# ------------------------------------------------------------------------------
+[profiles.vla_ppr]
+inherits = "default"
+description = "VLA standard pipeline execution via PPR XML"
+mode = "ppr"
+telescope = "vla"
+ppr = "rawdata/PPR.xml"
+plotlevel = "summary"
+
+# ------------------------------------------------------------------------------
+# 4. VLA Single-EB Recipe Workflow
+# ------------------------------------------------------------------------------
+[profiles.vla_recipe]
+inherits = "default"
+description = "VLA standard single-EB reduction via procedure_hifv.xml"
+mode = "recipe"
+telescope = "vla"
+procedure = "procedure_hifv.xml"
+vis = [
+    "pl-regressiontest/13A-537/13A-537.sb24066356.eb24324502.56514.05971091435"
+]
+
+# ------------------------------------------------------------------------------
+# 5. ALMA Single-EB Calimage Recipe Workflow
+# ------------------------------------------------------------------------------
+[profiles.alma_calimage]
+inherits = "default"
+description = "ALMA single-EB calimage reduction via procedure_hifa_calimage.xml"
+mode = "recipe"
+telescope = "alma"
+procedure = "procedure_hifa_calimage.xml"
+vis = [
+    "pl-unittest/uid___A002_Xc46ab2_X15ae_repSPW_spw16_17_small.ms",
+    "pl-unittest/uid___A002_Xc46ab2_X15ae_repSPW_spw16_17_small_target.ms"
+]
