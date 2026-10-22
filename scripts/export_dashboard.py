@@ -185,8 +185,20 @@ def load_telemetry_from_db(db_path: str) -> pd.DataFrame:
     if tasks_df.empty:
         return pd.DataFrame()
 
-    tasks_df["Start"] = pd.to_datetime(tasks_df["task_try_time_launched"], format="mixed", utc=True)
-    tasks_df["Finish"] = pd.to_datetime(tasks_df["task_try_time_returned"], format="mixed", utc=True).fillna(pd.Timestamp.now(tz="UTC"))
+    from datetime import datetime
+
+    local_tz = datetime.now().astimezone().tzinfo
+
+    def _convert_local(val):
+        if pd.isna(val):
+            return pd.NaT
+        dt = pd.to_datetime(val, format="mixed")
+        if dt.tz is not None:
+            return dt.tz_convert(local_tz).tz_localize(None)
+        return dt
+
+    tasks_df["Start"] = tasks_df["task_try_time_launched"].apply(_convert_local)
+    tasks_df["Finish"] = tasks_df["task_try_time_returned"].apply(_convert_local).fillna(pd.Timestamp.now())
     tasks_df["duration_s"] = (tasks_df["Finish"] - tasks_df["Start"]).dt.total_seconds().round(1)
     return tasks_df
 
@@ -202,12 +214,13 @@ def build_timeline_figure(tasks_df: pd.DataFrame) -> px.timeline:
         hover_data=["task_id", "task_status", "duration_s", "hostname"],
         color_discrete_map=TASK_COLOR_MAP,
     )
-    fig.update_yaxes(autorange="reversed", title_text="")
+    n_categories = tasks_df["task_func_name"].nunique()
+    fig.update_yaxes(autorange="reversed", title_text="", dtick=1)
     fig.update_xaxes(title_text="Timeline")
     fig.update_layout(
         margin={"l": 10, "r": 10, "t": 10, "b": 10},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
-        height=400,
+        height=max(450, n_categories * 26),
     )
     return fig
 
