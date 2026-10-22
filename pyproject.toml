@@ -10,7 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "parsl",
+    "pyyaml",
 ]
+
+[project.scripts]
+pac-man = "pac_man.cli:main"
+pacman = "pac_man.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
