@@ -26,6 +26,8 @@ profiles:
     workdir: /tmp/test_workdir
     max_weblog_workers: 3
     slurm_partition: compute
+    slurm_mail_user: alice@example.org
+    slurm_mail_type: BEGIN,END,FAIL
     condor_project: demo
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
@@ -104,6 +106,8 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     assert profile.monitoring_local_dir == "/tmp/demo-scratch"
     assert profile.max_weblog_workers == 3
     assert profile.slurm_partition == "compute"
+    assert profile.slurm_mail_user == "alice@example.org"
+    assert profile.slurm_mail_type == "BEGIN,END,FAIL"
     assert profile.condor_project == "demo"
     assert profile.slurm_tier0_memory_gb == 64
     assert profile.slurm_weblog_memory_gb == 4
@@ -241,6 +245,8 @@ profiles:
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
     monitoring_local_dir: /tmp/demo-scratch
+    slurm_mail_user: alice@example.org
+    slurm_mail_type: BEGIN,END,FAIL
 """,
         encoding="utf-8",
     )
@@ -261,6 +267,8 @@ profiles:
         assert kwargs["parsl_loglevel"] == expected_parsl_level
         assert kwargs["profile_name"] == "default"
         assert kwargs["monitoring_local_dir"] == "/tmp/demo-scratch"
+        assert kwargs["slurm_mail_user"] == "alice@example.org"
+        assert kwargs["slurm_mail_type"] == "BEGIN,END,FAIL"
         assert kwargs["loglevel"] == ('debug' if logging_options else 'info')
 
 

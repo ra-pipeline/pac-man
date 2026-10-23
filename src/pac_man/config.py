@@ -30,6 +30,29 @@ def _clean_optional_setting(value: str | None) -> str | None:
     return stripped or None
 
 
+def _slurm_mail_options(mail_user: str | None, mail_type: str | None) -> str:
+    """Build validated Slurm mail directives for both worker pools."""
+    user = _clean_optional_setting(mail_user)
+    types = _clean_optional_setting(mail_type)
+    options = []
+    if user:
+        if not re.fullmatch(r'[A-Za-z0-9_.+%@,-]+', user):
+            raise ValueError('slurm_mail_user must be a login or email address (comma-separated recipients allowed)')
+        options.append(f'#SBATCH --mail-user={user}')
+    if types:
+        events = list(dict.fromkeys(event.strip().upper() for event in types.split(',')))
+        valid = {
+            'NONE', 'BEGIN', 'END', 'FAIL', 'REQUEUE', 'ALL', 'INVALID_DEPEND',
+            'STAGE_OUT', 'TIME_LIMIT', 'TIME_LIMIT_90', 'TIME_LIMIT_80', 'TIME_LIMIT_50', 'ARRAY_TASKS',
+        }
+        if any(event not in valid for event in events):
+            raise ValueError('slurm_mail_type must contain comma-separated Slurm mail events, e.g. BEGIN,END,FAIL')
+        if 'NONE' in events and len(events) != 1:
+            raise ValueError('slurm_mail_type NONE cannot be combined with other events')
+        options.append(f"#SBATCH --mail-type={','.join(events)}")
+    return '\n'.join(options) + ('\n' if options else '')
+
+
 def _quote_condor_string(value: str) -> str:
     """Quote a string for use as an HTCondor ClassAd value."""
     escaped = value.replace('\\', '\\\\').replace('"', r'\"')
@@ -256,11 +279,14 @@ def get_slurm_config(
     tier0_memory_gb: int = 32,
     weblog_memory_gb: int = 8,
     profile_name: str = 'pacman',
+    mail_user: str | None = None,
+    mail_type: str | None = None,
 ) -> Config:
     """Scale nonexclusive Slurm blocks on demand, with one CPU and worker per block.
 
     Memory settings apply to each worker's block. Worker limits cap the
     number of blocks in each pool.
+    Optional mail settings request scheduler notifications for each worker job.
     """
     for name, value in (
         ('max_tier0_workers', max_tier0_workers),
@@ -270,6 +296,7 @@ def get_slurm_config(
     ):
         if value < 1:
             raise ValueError(f'{name} must be positive')
+    mail_options = _slurm_mail_options(mail_user, mail_type)
     effective_partition = _clean_optional_setting(partition) or _clean_optional_setting(
         os.environ.get('SLURM_JOB_PARTITION')
     )
@@ -287,6 +314,7 @@ def get_slurm_config(
                     nodes_per_block=1,
                     cores_per_node=1,
                     mem_per_node=tier0_memory_gb,
+                    scheduler_options=mail_options,
                     partition=effective_partition,
                     account=_clean_optional_setting(account),
                     qos=_clean_optional_setting(qos),
@@ -310,6 +338,7 @@ def get_slurm_config(
                     nodes_per_block=1,
                     cores_per_node=1,
                     mem_per_node=weblog_memory_gb,
+                    scheduler_options=mail_options,
                     partition=effective_partition,
                     account=_clean_optional_setting(account),
                     qos=_clean_optional_setting(qos),
@@ -344,6 +373,8 @@ def initialize_parsl(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
 ) -> None:
     """Initializes Parsl with the appropriate configuration.
 
@@ -363,6 +394,8 @@ def initialize_parsl(
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for Slurm job names and HTCondor batch names.
         monitoring_local_dir: Local scratch root for the live monitoring database.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm notification events, e.g. BEGIN,END,FAIL.
     """
     configure_console_logging(parsl_loglevel)
     for var in [
@@ -403,6 +436,8 @@ def initialize_parsl(
             constraint=slurm_constraint,
             tier0_memory_gb=slurm_tier0_memory_gb,
             weblog_memory_gb=slurm_weblog_memory_gb,
+            mail_user=slurm_mail_user,
+            mail_type=slurm_mail_type,
             profile_name=profile_name,
         )
     else:

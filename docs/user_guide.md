@@ -109,6 +109,43 @@ condor_requirements = "TARGET.HasFeature == true"
 condor_accounting_group = "group.demo"
 ```
 
+### Slurm Worker Email Notifications
+
+PAC-MAN does not request worker-job emails by default. The parent batch script's
+`#SBATCH --mail-*` directives apply to the orchestrator allocation; worker pools
+submit separate Slurm jobs. To request notifications for both compute and
+weblog worker jobs, set these profile options:
+
+```toml
+[profiles.demo]
+inherits = "default"
+backend = "slurm"
+slurm_mail_user = "alice@example.org"
+slurm_mail_type = "BEGIN,END,FAIL"
+```
+
+These become `#SBATCH --mail-user` and `#SBATCH --mail-type` in every worker
+submission. `BEGIN` requests start notifications, `END` requests job-end
+notifications, and `FAIL` requests failure notifications. Use `FAIL` alone for
+failure-only mail, `NONE` to disable events explicitly, or `ALL` for Slurm's
+standard event group. Other Slurm events such as `REQUEUE` and `TIME_LIMIT_90`
+are supported as comma-separated values. Event names are case-insensitive.
+See the [Slurm sbatch documentation](https://slurm.schedmd.com/sbatch.html#OPT_mail-type).
+
+Set both options to specify events and a recipient explicitly. A mail user
+without a mail type does not enable events by itself; a mail type without a
+user uses Slurm's default recipient. Recipient values can be logins or email
+addresses, including comma-separated recipients. Python runners and
+`initialize_parsl` accept `slurm_mail_user` and `slurm_mail_type` as keywords.
+
+Notifications describe scheduler worker-job events, not individual pipeline
+task events: workers are reused and may be retired when idle or during runner
+cleanup. A pipeline task failure does not necessarily fail its worker job.
+Scaling can therefore produce multiple emails. Mail delivery depends on the
+cluster's Slurm mail configuration; PAC-MAN does not send mail itself. Changes
+apply only to newly submitted workers and do not alter the parent job's mail
+settings. These options are used only by the Slurm backend.
+
 ### Scheduler Job Names
 
 Slurm job names and HTCondor `JobBatchName` attributes use the selected

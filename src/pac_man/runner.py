@@ -369,6 +369,8 @@ def _run_task_sequence(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
 ):
     """Core stage execution engine running synchronous task compute with detached QA and weblog."""
     main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
@@ -395,6 +397,8 @@ def _run_task_sequence(
             parsl_loglevel=parsl_loglevel,
             profile_name=profile_name,
             monitoring_local_dir=monitoring_local_dir,
+            slurm_mail_user=slurm_mail_user,
+            slurm_mail_type=slurm_mail_type,
         )
     except Exception as e:
         try:
@@ -662,6 +666,8 @@ def pac_man_reduce(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
 ):
     """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
 
@@ -691,6 +697,8 @@ def pac_man_reduce(
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
         casalog: Optional custom CASA log file path to aggregate all logging into a single file.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
@@ -733,6 +741,8 @@ def pac_man_reduce(
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
+        slurm_mail_user=slurm_mail_user,
+        slurm_mail_type=slurm_mail_type,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -768,6 +778,8 @@ def pac_man_executeppr(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
 ):
     """Executes a Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -795,6 +807,8 @@ def pac_man_executeppr(
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -930,6 +944,8 @@ def pac_man_executeppr(
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
+        slurm_mail_user=slurm_mail_user,
+        slurm_mail_type=slurm_mail_type,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -965,6 +981,8 @@ def pac_man_executevlappr(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
 ):
     """Executes a VLA Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -990,6 +1008,8 @@ def pac_man_executevlappr(
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -1088,6 +1108,8 @@ def pac_man_executevlappr(
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
+        slurm_mail_user=slurm_mail_user,
+        slurm_mail_type=slurm_mail_type,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
