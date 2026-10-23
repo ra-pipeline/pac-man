@@ -22,6 +22,7 @@ profiles:
     backend: subprocess
     loglevel: warning
     parsl_loglevel: error
+    monitoring_local_dir: /tmp/demo-scratch
     workdir: /tmp/test_workdir
     max_weblog_workers: 3
     slurm_partition: compute
@@ -100,6 +101,7 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     assert profile.backend == "subprocess"
     assert profile.loglevel == "warning"
     assert profile.parsl_loglevel == "error"
+    assert profile.monitoring_local_dir == "/tmp/demo-scratch"
     assert profile.max_weblog_workers == 3
     assert profile.slurm_partition == "compute"
     assert profile.condor_project == "demo"
@@ -238,6 +240,7 @@ profiles:
     condor_requirements: TARGET.HasFeature == true
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
+    monitoring_local_dir: /tmp/demo-scratch
 """,
         encoding="utf-8",
     )
@@ -257,6 +260,7 @@ profiles:
         assert kwargs["slurm_weblog_memory_gb"] == 4
         assert kwargs["parsl_loglevel"] == expected_parsl_level
         assert kwargs["profile_name"] == "default"
+        assert kwargs["monitoring_local_dir"] == "/tmp/demo-scratch"
         assert kwargs["loglevel"] == ('debug' if logging_options else 'info')
 
 

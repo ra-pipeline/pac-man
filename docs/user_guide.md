@@ -141,6 +141,90 @@ jobs from separate runs that share a name.
 
 The naming applies to newly submitted jobs after restarting the runner.
 
+### Live Monitoring on Shared Filesystems
+
+For Lustre or other shared storage, place the active SQLite monitoring database
+on **verified node-local scratch**. Leave the pipeline working directory and
+science products on shared storage. Configure the profile with:
+
+```toml
+[profiles.demo]
+inherits = "default"
+backend = "slurm"
+monitoring_local_dir = "${SLURM_TMPDIR}"
+```
+
+Environment variables in this setting expand when the pipeline starts, after
+entering the working directory. Unset variables cause an error. Alternatively,
+export `PACMAN_MONITORING_LOCAL_DIR` in the batch script. An explicit profile
+setting takes precedence. Python runners accept `monitoring_local_dir` too.
+Without either setting, the database stays in its usual shared location.
+PAC-MAN does not infer whether a directory is local: check your site's scratch
+policy, and substitute its local scratch path if `SLURM_TMPDIR` is unavailable.
+Each run gets a unique subdirectory under the chosen root. WAL mode is enabled
+only for these explicitly relocated databases.
+
+PAC-MAN writes `runinfo/monitoring.json` in the working directory to identify
+the live database and its host. The dashboard discovers this file even before
+`runinfo/monitoring.db` exists. **No symlink or manual database copy is needed.**
+You can also select the shared location explicitly:
+
+```bash
+export PACMAN_MONITORING_DB="$PWD/runinfo/monitoring.db"
+pixi run dashboard
+```
+
+`PACMAN_MONITORING_DB` selects the dashboard input; it does not configure the
+writer. For live progress, run the dashboard on the **same node as the pipeline
+orchestrator**, not a login node or an independently scheduled worker. Access
+its web interface through your site's approved tunnel or browser connection.
+The progress panels refresh every 10 seconds. Use **Refresh now** if the
+dashboard starts before the database/schema is ready or to reload workflow
+choices. Database locks receive bounded retries and a status message instead
+of a traceback; panel refreshes retry automatically.
+
+For example, inside a single-node Slurm batch allocation, after changing into
+the shared working directory and preparing inputs:
+
+```bash
+#!/bin/bash
+# Use the site's actual node-local scratch variable/path.
+export PACMAN_MONITORING_LOCAL_DIR="${SLURM_TMPDIR:?node-local scratch must be set}"
+export PACMAN_MONITORING_DB="$PWD/runinfo/monitoring.db"
+export PIXI_FROZEN=true
+export PIXI_NO_INSTALL=true
+pacman_manifest=/path/to/pac-man/pixi.toml
+
+# Background the web server so the pipeline can run alongside it on this node.
+pixi run --manifest-path "$pacman_manifest" dashboard >dashboard.out 2>&1 &
+dashboard_pid=$!
+trap 'kill "$dashboard_pid" 2>/dev/null || true' EXIT
+
+pipeline_status=0
+pixi run --manifest-path "$pacman_manifest" pac-man -p demo || pipeline_status=$?
+exit "$pipeline_status"
+```
+
+This example stops the dashboard when the pipeline exits. To inspect progress
+afterward, start a new dashboard against the saved shared database. Allocate
+enough orchestrator resources for the dashboard as well as the main process;
+avoid overlapping runs in the same working directory.
+
+After Parsl cleanup finishes, PAC-MAN uses SQLite's backup API to include
+committed WAL contents in a consistent snapshot. It atomically publishes a
+per-run archive at `runinfo/<Parsl-run-directory>/monitoring.db` (for example,
+`runinfo/000/monitoring.db`) and a copy at `runinfo/monitoring.db`. The location
+file switches dashboard readers to the completed archive, which can be read
+from any node with access to the shared directory. Earlier per-run archives
+remain available; select their database paths explicitly to inspect older runs.
+
+Ordinary pipeline failures that reach shutdown also save a snapshot. Forced
+termination, node failure, or a walltime kill can prevent finalization; this is
+not a continuously replicated database. Snapshot failures emit a warning and
+retain the live database for recovery. Local scratch copies are not removed by
+PAC-MAN; their lifetime follows site cleanup policy. A dashboard running only
+after the pipeline exits can read the shared snapshot without local scratch.
+
 ### CLI Pipeline Runner
 
 PAC-MAN provides the `pipeline-test` task mapped to `scripts/test_pipeline.py`. To prevent polluting the repository root with runtime logs (`casapy.log`), plots, and checkpoints, pipeline runs are automatically isolated in `working/` when invoked from the repository root.

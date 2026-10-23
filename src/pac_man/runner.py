@@ -14,6 +14,7 @@ import logging
 import os
 import platform
 import sqlite3
+from contextlib import closing
 
 import parsl
 from parsl.app.app import python_app
@@ -30,6 +31,7 @@ except ImportError:
 
 # Import pac-man config to initialize parsl
 from pac_man.config import initialize_parsl
+from pac_man.monitoring import snapshot_monitoring
 
 # Pipeline imports moved into pac_man_reduce to avoid early CASA initialization in remote workers
 LOG = logging.getLogger(__name__)
@@ -49,8 +51,7 @@ def _log_stage_execution(
     try:
         abs_db_path = os.path.abspath(db_path)
         os.makedirs(os.path.dirname(abs_db_path), exist_ok=True)
-        conn = sqlite3.connect(abs_db_path, timeout=10.0)
-        with conn:
+        with closing(sqlite3.connect(abs_db_path, timeout=30.0)) as conn, conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS stage_execution (
                     run_id TEXT,
@@ -93,7 +94,6 @@ def _log_stage_execution(
                         platform.node(),
                     ),
                 )
-        conn.close()
     except Exception as e:
         LOG.debug('Failed to record stage telemetry: %s', e)
 
@@ -368,6 +368,7 @@ def _run_task_sequence(
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
 ):
     """Core stage execution engine running synchronous task compute with detached QA and weblog."""
     main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
@@ -393,8 +394,13 @@ def _run_task_sequence(
             slurm_weblog_memory_gb=slurm_weblog_memory_gb,
             parsl_loglevel=parsl_loglevel,
             profile_name=profile_name,
+            monitoring_local_dir=monitoring_local_dir,
         )
     except Exception as e:
+        try:
+            parsl.dfk()
+        except parsl.errors.NoDataFlowKernelError:
+            raise e
         LOG.debug('Parsl already initialized or notice: %s', e)
 
     dfk = parsl.dfk()
@@ -619,9 +625,10 @@ def _run_task_sequence(
                 LOG.debug('Atrium metrics summary skipped: %s', metrics_err)
 
         try:
-            parsl.dfk().cleanup()
+            dfk.cleanup()
+            snapshot_monitoring(dfk.config.monitoring)
         except Exception as parsl_err:
-            LOG.debug('Parsl cleanup exception: %s', parsl_err)
+            LOG.warning('Parsl cleanup or monitoring snapshot failed: %s', parsl_err)
 
     return context
 
@@ -654,6 +661,7 @@ def pac_man_reduce(
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
 ):
     """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
 
@@ -682,6 +690,7 @@ def pac_man_reduce(
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         casalog: Optional custom CASA log file path to aggregate all logging into a single file.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
@@ -723,6 +732,7 @@ def pac_man_reduce(
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
+        monitoring_local_dir=monitoring_local_dir,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -757,6 +767,7 @@ def pac_man_executeppr(
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
 ):
     """Executes a Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -783,6 +794,7 @@ def pac_man_executeppr(
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -917,6 +929,7 @@ def pac_man_executeppr(
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
+        monitoring_local_dir=monitoring_local_dir,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -951,6 +964,7 @@ def pac_man_executevlappr(
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
 ):
     """Executes a VLA Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -975,6 +989,7 @@ def pac_man_executevlappr(
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -1072,6 +1087,7 @@ def pac_man_executevlappr(
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
+        monitoring_local_dir=monitoring_local_dir,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
