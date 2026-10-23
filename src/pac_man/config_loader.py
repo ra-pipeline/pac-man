@@ -64,6 +64,8 @@ class ResolvedProfile:
     raw_config: dict[str, Any] = field(default_factory=dict)
     slurm_tier0_memory_gb: int = 32
     slurm_weblog_memory_gb: int = 8
+    slurm_walltime: str = '168:00:00'
+    slurm_max_idletime: float = 120
     parsl_loglevel: str = 'info'
     monitoring_local_dir: str | None = None
     slurm_mail_user: str | None = None
@@ -349,6 +351,8 @@ def load_profile(
         raw_config=merged,
         slurm_tier0_memory_gb=int(merged.get('slurm_tier0_memory_gb', 32)),
         slurm_weblog_memory_gb=int(merged.get('slurm_weblog_memory_gb', 8)),
+        slurm_walltime=str(merged.get('slurm_walltime', '168:00:00')),
+        slurm_max_idletime=float(merged.get('slurm_max_idletime', 120)),
         parsl_loglevel=str(merged.get('parsl_loglevel', 'info')),
         monitoring_local_dir=merged.get('monitoring_local_dir'),
         slurm_mail_user=merged.get('slurm_mail_user'),

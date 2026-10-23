@@ -366,6 +366,8 @@ def _run_task_sequence(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
@@ -396,6 +398,8 @@ def _run_task_sequence(
             condor_accounting_group=condor_accounting_group,
             slurm_tier0_memory_gb=slurm_tier0_memory_gb,
             slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+            slurm_walltime=slurm_walltime,
+            slurm_max_idletime=slurm_max_idletime,
             parsl_loglevel=parsl_loglevel,
             profile_name=profile_name,
             monitoring_local_dir=monitoring_local_dir,
@@ -667,6 +671,8 @@ def pac_man_reduce(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
@@ -700,6 +706,8 @@ def pac_man_reduce(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
@@ -746,6 +754,8 @@ def pac_man_reduce(
         condor_accounting_group=condor_accounting_group,
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+        slurm_walltime=slurm_walltime,
+        slurm_max_idletime=slurm_max_idletime,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
@@ -785,6 +795,8 @@ def pac_man_executeppr(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
@@ -816,6 +828,8 @@ def pac_man_executeppr(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
@@ -955,6 +969,8 @@ def pac_man_executeppr(
         condor_accounting_group=condor_accounting_group,
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+        slurm_walltime=slurm_walltime,
+        slurm_max_idletime=slurm_max_idletime,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
@@ -994,6 +1010,8 @@ def pac_man_executevlappr(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
@@ -1023,6 +1041,8 @@ def pac_man_executevlappr(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
@@ -1125,6 +1145,8 @@ def pac_man_executevlappr(
         condor_accounting_group=condor_accounting_group,
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+        slurm_walltime=slurm_walltime,
+        slurm_max_idletime=slurm_max_idletime,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,

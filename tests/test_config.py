@@ -76,7 +76,8 @@ def test_slurm_partition_uses_site_default_outside_job(monkeypatch: pytest.Monke
     [
         ({}, [(10, 32), (2, 8)]),
         (
-            dict(max_tier0_workers=4, max_weblog_workers=1, tier0_memory_gb=64, weblog_memory_gb=4),
+            dict(max_tier0_workers=4, max_weblog_workers=1, tier0_memory_gb=64, weblog_memory_gb=4,
+                 walltime="08:30:00", max_idletime=600),
             [(4, 64), (1, 4)],
         ),
     ],
@@ -90,7 +91,7 @@ def test_slurm_dynamic_worker_submit_scripts(settings: dict, expected: list, tmp
     ):
         parsl_config = config.get_slurm_config(**settings)
         assert parsl_config.strategy == 'htex_auto_scale'
-        assert parsl_config.max_idletime == 120
+        assert parsl_config.max_idletime == settings.get("max_idletime", 120)
         for executor, (workers, memory) in zip(parsl_config.executors, expected):
             provider = executor.provider
             assert executor.max_workers_per_node == 1
@@ -104,6 +105,7 @@ def test_slurm_dynamic_worker_submit_scripts(settings: dict, expected: list, tmp
             Path(provider.script_dir).mkdir()
             assert provider.submit('true', tasks_per_node=1) == '123'
             script = next(Path(provider.script_dir).glob('parsl.slurm.*')).read_text()
+            assert f'#SBATCH --time={510 if settings else 10080}\n' in script
             assert '#SBATCH --ntasks-per-node=1\n' in script
             assert '#SBATCH --cpus-per-task=1\n' in script
             assert f'#SBATCH --mem={memory}g\n' in script
@@ -124,10 +126,13 @@ def test_slurm_initialize_forwards_memory_budgets() -> None:
         config.initialize_parsl(
             backend='slurm', max_tier0_workers=0, slurm_tier0_memory_gb=64, slurm_weblog_memory_gb=4,
             slurm_mail_user='alice@example.org', slurm_mail_type='BEGIN,END,FAIL',
+            slurm_walltime='08:30:00', slurm_max_idletime=600,
         )
     assert factory.call_args.kwargs['max_tier0_workers'] == 10
     assert factory.call_args.kwargs['tier0_memory_gb'] == 64
     assert factory.call_args.kwargs['weblog_memory_gb'] == 4
+    assert factory.call_args.kwargs['walltime'] == '08:30:00'
+    assert factory.call_args.kwargs['max_idletime'] == 600
     assert factory.call_args.kwargs['mail_user'] == 'alice@example.org'
     assert factory.call_args.kwargs['mail_type'] == 'BEGIN,END,FAIL'
 
@@ -343,3 +348,11 @@ def test_condor_accounting_group_submit_dry_run(
     assert attributes['acctgroup'] == 'group.demo'
     assert attributes['acctgroupuser'] == 'alice'
     assert attributes['accountinggroup'] == 'group.demo.alice'
+
+@pytest.mark.parametrize("settings", [
+    {"walltime": "00:00:00"}, {"walltime": "04:99:00"},
+    {"walltime": "4h"}, {"max_idletime": -1}, {"max_idletime": float("nan")},
+])
+def test_slurm_rejects_invalid_time_limits(settings):
+    with pytest.raises(ValueError):
+        config.get_slurm_config(**settings)
