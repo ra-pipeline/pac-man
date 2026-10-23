@@ -214,6 +214,8 @@ def get_condor_config(
     requirements: str | None = None,
     accounting_group: str | None = None,
     profile_name: str = 'pacman',
+    schedd: str | None = None,
+    pool: str | None = None,
 ) -> Config:
     """Returns a Parsl Config tailored for HTCondor OSG execution.
 
@@ -224,6 +226,8 @@ def get_condor_config(
         requirements: Optional HTCondor ClassAd requirements expression.
         accounting_group: Accounting group, inherited from an enclosing Condor job when omitted.
         profile_name: Short profile prefix for scheduler display names.
+        schedd: Optional remote schedd daemon name.
+        pool: Optional collector host for locating the schedd.
     """
     project, accounting_group = _resolve_condor_routing(project, accounting_group)
     provider_project = _quote_condor_string(project) if project else 'undefined'
@@ -236,6 +240,8 @@ def get_condor_config(
                 address=address_by_hostname(),
                 provider=CondorProvider(
                     profile_name=profile_name,
+                    schedd=schedd,
+                    pool=pool,
                     role='t0',
                     init_blocks=1,
                     min_blocks=0,
@@ -253,6 +259,8 @@ def get_condor_config(
                 address=address_by_hostname(),
                 provider=CondorProvider(
                     profile_name=profile_name,
+                    schedd=schedd,
+                    pool=pool,
                     role='wl',
                     init_blocks=1,
                     min_blocks=0,
@@ -375,6 +383,8 @@ def initialize_parsl(
     monitoring_local_dir: str | None = None,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ) -> None:
     """Initializes Parsl with the appropriate configuration.
 
@@ -396,6 +406,8 @@ def initialize_parsl(
         monitoring_local_dir: Local scratch root for the live monitoring database.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm notification events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
     """
     configure_console_logging(parsl_loglevel)
     for var in [
@@ -423,6 +435,8 @@ def initialize_parsl(
             project=condor_project,
             requirements=condor_requirements,
             accounting_group=condor_accounting_group,
+            schedd=condor_schedd,
+            pool=condor_pool,
             profile_name=profile_name,
         )
     elif backend == 'slurm':

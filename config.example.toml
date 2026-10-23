@@ -38,6 +38,8 @@ omp_num_threads = "1"             # OMP/BLAS thread limit per worker process
 # condor_project = "demo"          # Optional ProjectName; inherits from an enclosing Condor job
 # condor_requirements = "TARGET.HasFeature == true" # Optional ClassAd matching expression
 # condor_accounting_group = "group.demo" # Optional; inherits from an enclosing Condor job
+# condor_schedd = "schedd.example.org"  # Optional remote schedd Name; requires remote authorization
+# condor_pool = "collector.example.org" # Optional collector host[:port]; requires condor_schedd
 
 # ------------------------------------------------------------------------------
 # 2. ALMA Pipeline Processing Request (PPR)

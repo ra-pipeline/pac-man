@@ -29,6 +29,8 @@ profiles:
     slurm_mail_user: alice@example.org
     slurm_mail_type: BEGIN,END,FAIL
     condor_project: demo
+    condor_schedd: schedd.example.org
+    condor_pool: collector.example.org
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
 
@@ -109,6 +111,8 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     assert profile.slurm_mail_user == "alice@example.org"
     assert profile.slurm_mail_type == "BEGIN,END,FAIL"
     assert profile.condor_project == "demo"
+    assert profile.condor_schedd == "schedd.example.org"
+    assert profile.condor_pool == "collector.example.org"
     assert profile.slurm_tier0_memory_gb == 64
     assert profile.slurm_weblog_memory_gb == 4
     # Overridden / set in alma_test
@@ -247,6 +251,8 @@ profiles:
     monitoring_local_dir: /tmp/demo-scratch
     slurm_mail_user: alice@example.org
     slurm_mail_type: BEGIN,END,FAIL
+    condor_schedd: schedd.example.org
+    condor_pool: collector.example.org
 """,
         encoding="utf-8",
     )
@@ -269,6 +275,8 @@ profiles:
         assert kwargs["monitoring_local_dir"] == "/tmp/demo-scratch"
         assert kwargs["slurm_mail_user"] == "alice@example.org"
         assert kwargs["slurm_mail_type"] == "BEGIN,END,FAIL"
+        assert kwargs["condor_schedd"] == "schedd.example.org"
+        assert kwargs["condor_pool"] == "collector.example.org"
         assert kwargs["loglevel"] == ('debug' if logging_options else 'info')
 
 

@@ -51,5 +51,6 @@ def test_legacy_positional_arguments(name: str, legacy_names: list[str]) -> None
         'slurm_tier0_memory_gb', 'slurm_weblog_memory_gb',
         'parsl_loglevel', 'profile_name', 'monitoring_local_dir',
         'slurm_mail_user', 'slurm_mail_type',
+        'condor_schedd', 'condor_pool',
     ):
         assert signature.parameters[option].kind is inspect.Parameter.KEYWORD_ONLY

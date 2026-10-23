@@ -68,6 +68,8 @@ class ResolvedProfile:
     monitoring_local_dir: str | None = None
     slurm_mail_user: str | None = None
     slurm_mail_type: str | None = None
+    condor_schedd: str | None = None
+    condor_pool: str | None = None
 
 
 USER_CONFIG_CANDIDATES: list[Path] = [
@@ -351,4 +353,6 @@ def load_profile(
         monitoring_local_dir=merged.get('monitoring_local_dir'),
         slurm_mail_user=merged.get('slurm_mail_user'),
         slurm_mail_type=merged.get('slurm_mail_type'),
+        condor_schedd=merged.get('condor_schedd'),
+        condor_pool=merged.get('condor_pool'),
     )
