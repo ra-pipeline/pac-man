@@ -275,7 +275,8 @@ pixi run dashboard
 writer. For live progress, run the dashboard on the **same node as the pipeline
 orchestrator**, not a login node or an independently scheduled worker. Access
 its web interface through your site's approved tunnel or browser connection.
-The progress panels refresh every 10 seconds. Use **Refresh now** if the
+The progress panels refresh every 30 seconds by default. Turn off **Auto-refresh**
+in the sidebar to pause automatic updates; **Refresh now** still works. Use it if the
 dashboard starts before the database/schema is ready or to reload workflow
 choices. Database locks receive bounded retries and a status message instead
 of a traceback; panel refreshes retry automatically.
