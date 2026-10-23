@@ -271,13 +271,27 @@ def test_condor_config_applies_matching_and_accounting_controls() -> None:
             project="demo",
             requirements="TARGET.HasFeature == true",
             accounting_group="group.demo",
+            schedd="schedd.example.org",
+            pool="collector.example.org",
         )
 
     for executor in parsl_config["executors"]:
         provider = executor["provider"]
         assert provider["project"] == '"demo"'
         assert provider["requirements"] == "TARGET.HasFeature == true"
+        assert provider["schedd"] == "schedd.example.org"
+        assert provider["pool"] == "collector.example.org"
         assert 'accounting_group = group.demo\n' in provider["scheduler_options"]
+
+
+def test_initialize_forwards_remote_condor_settings() -> None:
+    """Remote queue selectors reach the HTCondor factory."""
+    with patch.object(config, 'get_condor_config') as factory, patch.object(config.parsl, 'load'):
+        config.initialize_parsl(
+            backend='htcondor', condor_schedd='schedd.example.org', condor_pool='collector.example.org',
+        )
+    assert factory.call_args.kwargs['schedd'] == 'schedd.example.org'
+    assert factory.call_args.kwargs['pool'] == 'collector.example.org'
 
 
 def test_condor_accounting_group_rejects_newlines() -> None:

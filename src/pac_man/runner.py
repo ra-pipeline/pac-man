@@ -371,6 +371,8 @@ def _run_task_sequence(
     monitoring_local_dir: str | None = None,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Core stage execution engine running synchronous task compute with detached QA and weblog."""
     main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
@@ -399,6 +401,8 @@ def _run_task_sequence(
             monitoring_local_dir=monitoring_local_dir,
             slurm_mail_user=slurm_mail_user,
             slurm_mail_type=slurm_mail_type,
+            condor_schedd=condor_schedd,
+            condor_pool=condor_pool,
         )
     except Exception as e:
         try:
@@ -668,6 +672,8 @@ def pac_man_reduce(
     monitoring_local_dir: str | None = None,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
 
@@ -699,6 +705,8 @@ def pac_man_reduce(
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
         casalog: Optional custom CASA log file path to aggregate all logging into a single file.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
@@ -743,6 +751,8 @@ def pac_man_reduce(
         monitoring_local_dir=monitoring_local_dir,
         slurm_mail_user=slurm_mail_user,
         slurm_mail_type=slurm_mail_type,
+        condor_schedd=condor_schedd,
+        condor_pool=condor_pool,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -780,6 +790,8 @@ def pac_man_executeppr(
     monitoring_local_dir: str | None = None,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Executes a Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -809,6 +821,8 @@ def pac_man_executeppr(
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -946,6 +960,8 @@ def pac_man_executeppr(
         monitoring_local_dir=monitoring_local_dir,
         slurm_mail_user=slurm_mail_user,
         slurm_mail_type=slurm_mail_type,
+        condor_schedd=condor_schedd,
+        condor_pool=condor_pool,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -983,6 +999,8 @@ def pac_man_executevlappr(
     monitoring_local_dir: str | None = None,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Executes a VLA Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -1010,6 +1028,8 @@ def pac_man_executevlappr(
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -1110,6 +1130,8 @@ def pac_man_executevlappr(
         monitoring_local_dir=monitoring_local_dir,
         slurm_mail_user=slurm_mail_user,
         slurm_mail_type=slurm_mail_type,
+        condor_schedd=condor_schedd,
+        condor_pool=condor_pool,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,

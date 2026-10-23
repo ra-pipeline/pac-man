@@ -109,6 +109,66 @@ condor_requirements = "TARGET.HasFeature == true"
 condor_accounting_group = "group.demo"
 ```
 
+### Remote HTCondor Schedd
+
+When the PAC-MAN main process runs away from the submission host (for example,
+inside a Slurm allocation or an HTCondor execute job), select the schedd that
+will own its worker jobs:
+
+```toml
+[profiles.demo]
+inherits = "default"
+backend = "htcondor"
+condor_schedd = "schedd.example.org"
+condor_pool = "collector.example.org:9618"
+```
+
+`condor_schedd` is the schedd's advertised `Name`, which may differ from its
+hostname. `condor_pool` selects the collector used to locate it; omit this to
+use the client's configured collector. A pool override requires an explicit
+schedd so all worker commands address the same queue. With neither option,
+Parsl's existing default submission behavior is unchanged. Both worker pools
+use these settings. Public Python runners and `initialize_parsl` accept the
+same `condor_schedd` and `condor_pool` keywords.
+
+PAC-MAN adds only `-name` and the optional `-pool` to `condor_submit`,
+`condor_q`, and both worker-removal commands. It does not add `-spool` or
+`-remote`, and does not run `condor_transfer_data` during polling or cleanup.
+This follows the pool's existing shared-filesystem submission behavior:
+
+```bash
+condor_submit -name schedd.example.org -pool collector.example.org:9618 worker.submit
+```
+
+File-transfer and spooling behavior otherwise follow HTCondor's client/site
+configuration and the existing Parsl submit template. Science products remain
+in the shared working directory under the existing pipeline execution model.
+
+This routes scheduler commands; it does **not** grant submission permission.
+Ask your administrator to provide remote authentication and authorization for
+submission, querying, and removal from the node running PAC-MAN.
+For example, the site may configure IDTOKENS or another supported remote
+authentication method. Keep credentials in HTCondor's normal secure credential
+configuration, not profile files. If site policy prohibits submission from
+execute nodes, these settings cannot override that restriction.
+
+The main node needs the HTCondor command-line tools and network access to the
+collector and schedd. Workers must also reach the main node's Parsl address
+and ports. The current PAC-MAN deployment still requires shared, consistently
+mounted data/software paths; scheduler routing does not package CASA, Pipeline,
+datasets, or Parsl certificates for disconnected workers.
+
+For an administrator-approved **read-only connectivity check** from the main
+node, use:
+
+```bash
+condor_q -name schedd.example.org -pool collector.example.org:9618
+```
+
+A successful query does not prove permission to submit or remove jobs. See
+HTCondor's [submission command reference](https://htcondor.readthedocs.io/en/latest/man-pages/condor_submit.html)
+for the distinction between `-name` and explicit spooling options.
+
 ### Slurm Worker Email Notifications
 
 PAC-MAN does not request worker-job emails by default. The parent batch script's
