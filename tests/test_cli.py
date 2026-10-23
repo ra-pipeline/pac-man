@@ -33,6 +33,8 @@ profiles:
     condor_pool: collector.example.org
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
+    slurm_walltime: "08:30:00"
+    slurm_max_idletime: 600
 
   alma_test:
     inherits: base
@@ -248,6 +250,8 @@ profiles:
     condor_requirements: TARGET.HasFeature == true
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
+    slurm_walltime: "08:30:00"
+    slurm_max_idletime: 600
     monitoring_local_dir: /tmp/demo-scratch
     slurm_mail_user: alice@example.org
     slurm_mail_type: BEGIN,END,FAIL
@@ -270,6 +274,8 @@ profiles:
         assert kwargs["condor_requirements"] == "TARGET.HasFeature == true"
         assert kwargs["slurm_tier0_memory_gb"] == 64
         assert kwargs["slurm_weblog_memory_gb"] == 4
+        assert kwargs["slurm_walltime"] == "08:30:00"
+        assert kwargs["slurm_max_idletime"] == 600
         assert kwargs["parsl_loglevel"] == expected_parsl_level
         assert kwargs["profile_name"] == "default"
         assert kwargs["monitoring_local_dir"] == "/tmp/demo-scratch"

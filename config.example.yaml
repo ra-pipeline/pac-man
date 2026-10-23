@@ -30,6 +30,8 @@ profiles:
     slurm_constraint: null        # Optional Slurm node constraint
     slurm_tier0_memory_gb: 32      # Memory per Slurm compute worker
     slurm_weblog_memory_gb: 8      # Memory per Slurm weblog worker
+    slurm_walltime: "168:00:00"     # Lifetime per worker allocation
+    slurm_max_idletime: 120       # Seconds before releasing idle Slurm workers
     condor_project: null          # Inherit ProjectName from an enclosing Condor job
     condor_requirements: null     # Optional ClassAd matching expression
     condor_accounting_group: null # Inherit from an enclosing Condor job

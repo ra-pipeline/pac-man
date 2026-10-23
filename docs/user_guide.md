@@ -452,3 +452,11 @@ tail -f casapy.log
 
 For formal citations, DOIs, and developer manuals, see the [References & Citations](references.md) section.
 
+
+Slurm profiles accept `slurm_walltime` (default `"168:00:00"`, seven days, HH:MM:SS)
+and `slurm_max_idletime` (default `120`, seconds). Both apply to the compute
+and weblog pools. Walltime counts the entire allocation lifetime, including idle
+time; Slurm can terminate active work at that limit. Parsl releases idle workers
+after the idle threshold and requests replacements when tasks arrive. An idle
+timeout of zero allows immediate scale-in on the next strategy cycle; it does
+not disable scale-in. These settings do not change the parent launch job.

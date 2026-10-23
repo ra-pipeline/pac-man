@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 from pathlib import Path
@@ -286,6 +287,8 @@ def get_slurm_config(
     constraint: str | None = None,
     tier0_memory_gb: int = 32,
     weblog_memory_gb: int = 8,
+    walltime: str = '168:00:00',
+    max_idletime: float = 120,
     profile_name: str = 'pacman',
     mail_user: str | None = None,
     mail_type: str | None = None,
@@ -304,6 +307,14 @@ def get_slurm_config(
     ):
         if value < 1:
             raise ValueError(f'{name} must be positive')
+    if (
+        not isinstance(walltime, str)
+        or not re.fullmatch(r'[0-9]+:[0-5][0-9]:[0-5][0-9]', walltime)
+        or not any(int(v) for v in walltime.split(':'))
+    ):
+        raise ValueError('slurm_walltime must be a positive duration in HH:MM:SS format')
+    if not math.isfinite(max_idletime) or max_idletime < 0:
+        raise ValueError('slurm_max_idletime must be finite and nonnegative')
     mail_options = _slurm_mail_options(mail_user, mail_type)
     effective_partition = _clean_optional_setting(partition) or _clean_optional_setting(
         os.environ.get('SLURM_JOB_PARTITION')
@@ -319,6 +330,7 @@ def get_slurm_config(
                     profile_name=profile_name,
                     role='t0',
                     exclusive=False,
+                    walltime=walltime,
                     nodes_per_block=1,
                     cores_per_node=1,
                     mem_per_node=tier0_memory_gb,
@@ -343,6 +355,7 @@ def get_slurm_config(
                     profile_name=profile_name,
                     role='wl',
                     exclusive=False,
+                    walltime=walltime,
                     nodes_per_block=1,
                     cores_per_node=1,
                     mem_per_node=weblog_memory_gb,
@@ -360,7 +373,7 @@ def get_slurm_config(
             ),
         ],
         strategy='htex_auto_scale',
-        max_idletime=120,
+        max_idletime=max_idletime,
         monitoring=get_monitoring_hub(),
     )
 
@@ -378,6 +391,8 @@ def initialize_parsl(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
@@ -401,6 +416,8 @@ def initialize_parsl(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for Slurm job names and HTCondor batch names.
         monitoring_local_dir: Local scratch root for the live monitoring database.
@@ -450,6 +467,8 @@ def initialize_parsl(
             constraint=slurm_constraint,
             tier0_memory_gb=slurm_tier0_memory_gb,
             weblog_memory_gb=slurm_weblog_memory_gb,
+            walltime=slurm_walltime,
+            max_idletime=slurm_max_idletime,
             mail_user=slurm_mail_user,
             mail_type=slurm_mail_type,
             profile_name=profile_name,
