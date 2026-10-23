@@ -109,6 +109,38 @@ condor_requirements = "TARGET.HasFeature == true"
 condor_accounting_group = "group.demo"
 ```
 
+### Scheduler Job Names
+
+Slurm job names and HTCondor `JobBatchName` attributes use the selected
+profile, worker role, and Parsl block number. For example, profile `demo`
+produces `demo-t0-04` for compute block 4 and `demo-wl-01` for weblog block 1.
+Block numbers start at zero and use at least two digits. Names are capped at
+32 characters by shortening the profile prefix; characters other than letters,
+digits, underscores, and hyphens are replaced with hyphens.
+
+The CLI uses the selected profile name automatically. Python callers can pass
+`profile_name="demo"` to `pac_man_reduce`, `pac_man_executeppr`,
+`pac_man_executevlappr`, or `initialize_parsl`; the default is `pacman`.
+
+Display the names with:
+
+```bash
+# Slurm
+squeue -u "$USER" -o "%.18i %.32j %.8T"
+
+# HTCondor: batch view or explicit per-job columns
+condor_q -batch
+condor_q -af ClusterId ProcId JobBatchName JobStatus
+```
+
+Workers can serve several stages, so stage names appear in the dashboard's
+task labels. Parsl executor labels and timestamped script/log filenames retain
+their original identifiers. Display names can repeat across runs; use scheduler
+job IDs to distinguish individual allocations. HTCondor's batch view may group
+jobs from separate runs that share a name.
+
+The naming applies to newly submitted jobs after restarting the runner.
+
 ### CLI Pipeline Runner
 
 PAC-MAN provides the `pipeline-test` task mapped to `scripts/test_pipeline.py`. To prevent polluting the repository root with runtime logs (`casapy.log`), plots, and checkpoints, pipeline runs are automatically isolated in `working/` when invoked from the repository root.

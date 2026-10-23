@@ -256,6 +256,7 @@ profiles:
         assert kwargs["slurm_tier0_memory_gb"] == 64
         assert kwargs["slurm_weblog_memory_gb"] == 4
         assert kwargs["parsl_loglevel"] == expected_parsl_level
+        assert kwargs["profile_name"] == "default"
         assert kwargs["loglevel"] == ('debug' if logging_options else 'info')
 
 
@@ -286,6 +287,7 @@ profiles:
         _, kwargs = mock_exec.call_args
         assert kwargs["pprXmlFile"] == str(ppr_file.resolve())
         assert kwargs["backend"] == "threads"
+        assert kwargs["profile_name"] == "default"
 
 
 def test_cli_dispatch_recipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -317,4 +319,5 @@ profiles:
         mock_reduce.assert_called_once()
         _, kwargs = mock_reduce.call_args
         assert kwargs["procedure"] == "procedure_hifv.xml"
+        assert kwargs["profile_name"] == "default"
         assert len(kwargs["vis"]) == 2

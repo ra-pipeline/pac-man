@@ -11,9 +11,10 @@ from parsl.executors import HighThroughputExecutor, ThreadPoolExecutor
 from parsl.launchers.base import Launcher
 from parsl.monitoring.monitoring import MonitoringHub
 from parsl.monitoring.radios.udp import UDPRadio
-from parsl.providers import CondorProvider, LocalProvider, SlurmProvider
+from parsl.providers import LocalProvider
 
 from pac_man.logging_utils import configure_console_logging
+from pac_man.providers import NamedCondorProvider as CondorProvider, NamedSlurmProvider as SlurmProvider
 
 _PACKAGE_SRC = str(Path(__file__).resolve().parent.parent)
 
@@ -188,6 +189,7 @@ def get_condor_config(
     project: str | None = None,
     requirements: str | None = None,
     accounting_group: str | None = None,
+    profile_name: str = 'pacman',
 ) -> Config:
     """Returns a Parsl Config tailored for HTCondor OSG execution.
 
@@ -197,6 +199,7 @@ def get_condor_config(
         project: HTCondor project name, inherited from an enclosing Condor job when omitted.
         requirements: Optional HTCondor ClassAd requirements expression.
         accounting_group: Accounting group, inherited from an enclosing Condor job when omitted.
+        profile_name: Short profile prefix for scheduler display names.
     """
     project, accounting_group = _resolve_condor_routing(project, accounting_group)
     provider_project = _quote_condor_string(project) if project else 'undefined'
@@ -208,6 +211,8 @@ def get_condor_config(
                 label='tier0_executor',
                 address=address_by_hostname(),
                 provider=CondorProvider(
+                    profile_name=profile_name,
+                    role='t0',
                     init_blocks=1,
                     min_blocks=0,
                     max_blocks=max_tier0_workers,  # Dynamically scales up to this limit based on queued tasks
@@ -223,6 +228,8 @@ def get_condor_config(
                 label='weblog_executor',
                 address=address_by_hostname(),
                 provider=CondorProvider(
+                    profile_name=profile_name,
+                    role='wl',
                     init_blocks=1,
                     min_blocks=0,
                     max_blocks=max_weblog_workers,  # Renderers don't need to scale infinitely
@@ -247,6 +254,7 @@ def get_slurm_config(
     constraint: str | None = None,
     tier0_memory_gb: int = 32,
     weblog_memory_gb: int = 8,
+    profile_name: str = 'pacman',
 ) -> Config:
     """Scale nonexclusive Slurm blocks on demand, with one CPU and worker per block.
 
@@ -272,6 +280,8 @@ def get_slurm_config(
                 max_workers_per_node=1,
                 cores_per_worker=1,
                 provider=SlurmProvider(
+                    profile_name=profile_name,
+                    role='t0',
                     exclusive=False,
                     nodes_per_block=1,
                     cores_per_node=1,
@@ -293,6 +303,8 @@ def get_slurm_config(
                 max_workers_per_node=1,
                 cores_per_worker=1,
                 provider=SlurmProvider(
+                    profile_name=profile_name,
+                    role='wl',
                     exclusive=False,
                     nodes_per_block=1,
                     cores_per_node=1,
@@ -329,6 +341,7 @@ def initialize_parsl(
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
+    profile_name: str = 'pacman',
 ) -> None:
     """Initializes Parsl with the appropriate configuration.
 
@@ -346,6 +359,7 @@ def initialize_parsl(
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
+        profile_name: Profile prefix for Slurm job names and HTCondor batch names.
     """
     configure_console_logging(parsl_loglevel)
     for var in [
@@ -373,6 +387,7 @@ def initialize_parsl(
             project=condor_project,
             requirements=condor_requirements,
             accounting_group=condor_accounting_group,
+            profile_name=profile_name,
         )
     elif backend == 'slurm':
         effective_tier0 = 10 if not max_tier0_workers else max_tier0_workers
@@ -385,6 +400,7 @@ def initialize_parsl(
             constraint=slurm_constraint,
             tier0_memory_gb=slurm_tier0_memory_gb,
             weblog_memory_gb=slurm_weblog_memory_gb,
+            profile_name=profile_name,
         )
     else:
         raise ValueError(
