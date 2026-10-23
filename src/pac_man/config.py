@@ -14,6 +14,7 @@ from parsl.monitoring.radios.udp import UDPRadio
 from parsl.providers import LocalProvider
 
 from pac_man.logging_utils import configure_console_logging
+from pac_man.monitoring import configure_local_monitoring, publish_monitoring_location
 from pac_man.providers import NamedCondorProvider as CondorProvider, NamedSlurmProvider as SlurmProvider
 
 _PACKAGE_SRC = str(Path(__file__).resolve().parent.parent)
@@ -342,6 +343,7 @@ def initialize_parsl(
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
 ) -> None:
     """Initializes Parsl with the appropriate configuration.
 
@@ -360,6 +362,7 @@ def initialize_parsl(
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for Slurm job names and HTCondor batch names.
+        monitoring_local_dir: Local scratch root for the live monitoring database.
     """
     configure_console_logging(parsl_loglevel)
     for var in [
@@ -407,4 +410,6 @@ def initialize_parsl(
             f'Unknown Parsl backend requested: {backend}. Choose from: threads, subprocess, htcondor, slurm'
         )
 
-    parsl.load(config)
+    configure_local_monitoring(config.monitoring, monitoring_local_dir)
+    dfk = parsl.load(config)
+    publish_monitoring_location(config.monitoring, dfk.run_dir)
