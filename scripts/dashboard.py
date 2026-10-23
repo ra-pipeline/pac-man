@@ -71,6 +71,7 @@ def get_data(query: str, params: tuple | list | None = None) -> pd.DataFrame:
 st.title('PAC-MAN Execution Dashboard')
 st.caption(f'Database: `{os.path.abspath(DB_PATH)}`')
 
+auto_refresh = st.sidebar.toggle('Auto-refresh', value=True, help='Refresh progress every 30 seconds.')
 st.button('Refresh now')
 
 try:
@@ -87,7 +88,7 @@ if workflows.empty:
 
 selected_run = st.sidebar.selectbox('Workflow Run', workflows['run_id'])
 
-@st.fragment(run_every=10)
+@st.fragment(run_every=30 if auto_refresh else None)
 def render_progress() -> None:
     """Refresh progress without resetting the selected workflow."""
     # 2. Task Status Summary (status table has task_status_name)
