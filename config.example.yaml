@@ -23,6 +23,15 @@ profiles:
     max_tier0_workers: null       # Maximum concurrent workers for pipeline stages (null for automatic)
     max_weblog_workers: 2         # Maximum concurrent workers for background weblog rendering
     omp_num_threads: "1"          # OMP/BLAS thread limit per worker process
+    slurm_partition: null         # Inherit $SLURM_JOB_PARTITION, then use the site default
+    slurm_account: null           # Optional Slurm account
+    slurm_qos: null               # Optional Slurm quality of service
+    slurm_constraint: null        # Optional Slurm node constraint
+    slurm_tier0_memory_gb: 32      # Memory per Slurm compute worker
+    slurm_weblog_memory_gb: 8      # Memory per Slurm weblog worker
+    condor_project: null          # Inherit ProjectName from an enclosing Condor job
+    condor_requirements: null     # Optional ClassAd matching expression
+    condor_accounting_group: null # Inherit from an enclosing Condor job
 
   # ALMA Pipeline Processing Request (PPR) execution
   alma_ppr:

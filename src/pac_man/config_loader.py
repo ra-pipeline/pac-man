@@ -16,12 +16,12 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_FILENAMES: list[str] = [
-    "pacman.yaml",
-    "pacman.yml",
-    "pacman.toml",
-    "config.yaml",
-    "config.yml",
-    "config.toml",
+    'pacman.yaml',
+    'pacman.yml',
+    'pacman.toml',
+    'config.yaml',
+    'config.yml',
+    'config.toml',
 ]
 
 
@@ -31,39 +31,48 @@ class ResolvedProfile:
 
     name: str
     mode: str  # 'ppr' or 'recipe'
-    telescope: str = "alma"  # 'alma' or 'vla'
+    telescope: str = 'alma'  # 'alma' or 'vla'
     # PPR settings
     ppr: str | None = None
     importonly: bool = False
-    bp_name: str = "breakpoint"
-    bpaction: str = "ignore"
+    bp_name: str = 'breakpoint'
+    bpaction: str = 'ignore'
     # Recipe settings
     procedure: str | None = None
     vis: list[str] = field(default_factory=list)
     session: list[str] | None = None
     infiles: list[str] = field(default_factory=list)
     # Execution & Runtime settings
-    backend: str = "subprocess"
+    backend: str = 'subprocess'
     workdir: str | None = None
-    loglevel: str = "info"
-    plotlevel: str = "default"
+    loglevel: str = 'info'
+    plotlevel: str = 'default'
     casalog: str | None = None
     log2term: bool | None = None
     exitstage: int | None = None
     startstage: int | None = None
     max_tier0_workers: int | None = None
     max_weblog_workers: int = 2
-    omp_num_threads: str = "1"
+    omp_num_threads: str = '1'
+    slurm_partition: str | None = None
+    slurm_account: str | None = None
+    slurm_qos: str | None = None
+    slurm_constraint: str | None = None
+    condor_project: str | None = None
+    condor_requirements: str | None = None
+    condor_accounting_group: str | None = None
     raw_config: dict[str, Any] = field(default_factory=dict)
+    slurm_tier0_memory_gb: int = 32
+    slurm_weblog_memory_gb: int = 8
 
 
 USER_CONFIG_CANDIDATES: list[Path] = [
-    Path("~/.pacman/config.toml").expanduser(),
-    Path("~/.pacman/config.yaml").expanduser(),
-    Path("~/.pacman/config.yml").expanduser(),
-    Path("~/.pacman.toml").expanduser(),
-    Path("~/.config/pacman/config.toml").expanduser(),
-    Path("~/.config/pacman/config.yaml").expanduser(),
+    Path('~/.pacman/config.toml').expanduser(),
+    Path('~/.pacman/config.yaml').expanduser(),
+    Path('~/.pacman/config.yml').expanduser(),
+    Path('~/.pacman.toml').expanduser(),
+    Path('~/.config/pacman/config.toml').expanduser(),
+    Path('~/.config/pacman/config.yaml').expanduser(),
 ]
 
 
@@ -77,7 +86,7 @@ def find_default_config(start_dir: str | Path | None = None) -> Path | None:
     4. User home directory: ``~/.pacman/config.toml``, ``~/.config/pacman/config.toml``, ``~/.pacman.toml``
     """
     # 1. Environment variable override
-    env_config = os.environ.get("PACMAN_CONFIG")
+    env_config = os.environ.get('PACMAN_CONFIG')
     if env_config:
         env_path = Path(env_config).expanduser().resolve()
         if env_path.is_file():
@@ -91,7 +100,7 @@ def find_default_config(start_dir: str | Path | None = None) -> Path | None:
             return candidate_path
 
     # 3. Project / Pixi root candidates (if running inside repo)
-    pixi_root = os.environ.get("PIXI_PROJECT_ROOT")
+    pixi_root = os.environ.get('PIXI_PROJECT_ROOT')
     if pixi_root:
         proj_dir = Path(pixi_root).resolve()
         if proj_dir != base_dir:
@@ -99,7 +108,7 @@ def find_default_config(start_dir: str | Path | None = None) -> Path | None:
                 cand = proj_dir / candidate_name
                 if cand.is_file():
                     return cand
-            scripts_cand = proj_dir / "scripts" / "config.toml"
+            scripts_cand = proj_dir / 'scripts' / 'config.toml'
             if scripts_cand.is_file():
                 return scripts_cand
 
@@ -126,12 +135,12 @@ def load_raw_config(config_path: str | Path) -> dict[str, Any]:
     """
     path = Path(config_path).expanduser().resolve()
     if not path.is_file():
-        raise FileNotFoundError(f"Configuration file not found: {path}")
+        raise FileNotFoundError(f'Configuration file not found: {path}')
 
     suffix = path.suffix.lower()
-    content = path.read_text(encoding="utf-8")
+    content = path.read_text(encoding='utf-8')
 
-    if suffix in (".yaml", ".yml"):
+    if suffix in ('.yaml', '.yml'):
         try:
             import yaml
 
@@ -140,7 +149,7 @@ def load_raw_config(config_path: str | Path) -> dict[str, Any]:
         except Exception as err:
             raise ValueError(f"Failed to parse YAML configuration '{path}': {err}") from err
 
-    elif suffix == ".toml":
+    elif suffix == '.toml':
         try:
             import tomllib  # Python 3.11+ standard library
         except ImportError:
@@ -193,15 +202,15 @@ def resolve_profile_data(
         visited = []
 
     if profile_name in visited:
-        cycle_chain = " -> ".join(visited + [profile_name])
-        raise ValueError(f"Cyclic profile inheritance detected: {cycle_chain}")
+        cycle_chain = ' -> '.join(visited + [profile_name])
+        raise ValueError(f'Cyclic profile inheritance detected: {cycle_chain}')
 
     if profile_name not in profiles_dict:
-        available = ", ".join(sorted(profiles_dict.keys()))
+        available = ', '.join(sorted(profiles_dict.keys()))
         raise ValueError(f"Profile '{profile_name}' not found. Available profiles: {available}")
 
     current_data = deepcopy(profiles_dict[profile_name])
-    parent_name = current_data.pop("inherits", None)
+    parent_name = current_data.pop('inherits', None)
 
     if parent_name:
         parent_merged = resolve_profile_data(profiles_dict, parent_name, visited + [profile_name])
@@ -245,60 +254,60 @@ def load_profile(
     config_dir = cfg_file.parent
     raw_cfg = load_raw_config(cfg_file)
 
-    profiles = raw_cfg.get("profiles", {})
+    profiles = raw_cfg.get('profiles', {})
     if not isinstance(profiles, dict) or not profiles:
         # If top level keys look like a single profile definition
-        if "mode" in raw_cfg or "ppr" in raw_cfg or "procedure" in raw_cfg:
-            profiles = {"default": raw_cfg}
+        if 'mode' in raw_cfg or 'ppr' in raw_cfg or 'procedure' in raw_cfg:
+            profiles = {'default': raw_cfg}
         else:
             raise ValueError(f"Configuration file '{cfg_file}' has no 'profiles' section defined.")
 
-    target_profile = profile_name or raw_cfg.get("default_profile") or "default"
+    target_profile = profile_name or raw_cfg.get('default_profile') or 'default'
     merged = resolve_profile_data(profiles, target_profile)
 
     # Determine execution mode: 'ppr' or 'recipe'
-    mode = merged.get("mode")
+    mode = merged.get('mode')
     if not mode:
-        if "ppr" in merged or "pprXmlFile" in merged:
-            mode = "ppr"
-        elif "procedure" in merged or "vis" in merged:
-            mode = "recipe"
+        if 'ppr' in merged or 'pprXmlFile' in merged:
+            mode = 'ppr'
+        elif 'procedure' in merged or 'vis' in merged:
+            mode = 'recipe'
         else:
-            mode = "ppr"
+            mode = 'ppr'
 
     mode = str(mode).lower()
-    if mode not in ("ppr", "recipe"):
+    if mode not in ('ppr', 'recipe'):
         raise ValueError(f"Invalid execution mode '{mode}' in profile '{target_profile}'. Must be 'ppr' or 'recipe'.")
 
     # Telescope
-    telescope = str(merged.get("telescope", "alma")).lower()
+    telescope = str(merged.get('telescope', 'alma')).lower()
 
     # PPR resolution
-    ppr_raw = merged.get("ppr") or merged.get("pprXmlFile") or merged.get("ppr_file")
+    ppr_raw = merged.get('ppr') or merged.get('pprXmlFile') or merged.get('ppr_file')
     ppr_resolved = resolve_path_relative_to_config(ppr_raw, config_dir) if ppr_raw else None
 
     # Recipe procedure resolution
-    proc_raw = merged.get("procedure")
+    proc_raw = merged.get('procedure')
     proc_resolved = resolve_path_relative_to_config(proc_raw, config_dir) if proc_raw else None
 
     # Datasets (vis)
-    vis_raw = merged.get("vis", [])
+    vis_raw = merged.get('vis', [])
     if isinstance(vis_raw, str):
         vis_raw = [vis_raw]
     vis_resolved = [resolve_path_relative_to_config(v, config_dir) or v for v in vis_raw]
 
     # Infiles (single dish)
-    infiles_raw = merged.get("infiles", [])
+    infiles_raw = merged.get('infiles', [])
     if isinstance(infiles_raw, str):
         infiles_raw = [infiles_raw]
     infiles_resolved = [resolve_path_relative_to_config(f, config_dir) or f for f in infiles_raw]
 
     # Working directory
-    workdir_raw = merged.get("workdir")
+    workdir_raw = merged.get('workdir')
     workdir_resolved = resolve_path_relative_to_config(workdir_raw, config_dir) if workdir_raw else None
 
     # CASA log
-    casalog_raw = merged.get("casalog")
+    casalog_raw = merged.get('casalog')
     casalog_resolved = resolve_path_relative_to_config(casalog_raw, config_dir) if casalog_raw else None
 
     return ResolvedProfile(
@@ -306,23 +315,32 @@ def load_profile(
         mode=mode,
         telescope=telescope,
         ppr=ppr_resolved,
-        importonly=bool(merged.get("importonly", False)),
-        bp_name=str(merged.get("bp_name", "breakpoint")),
-        bpaction=str(merged.get("bpaction", "ignore")),
+        importonly=bool(merged.get('importonly', False)),
+        bp_name=str(merged.get('bp_name', 'breakpoint')),
+        bpaction=str(merged.get('bpaction', 'ignore')),
         procedure=proc_resolved,
         vis=vis_resolved,
-        session=merged.get("session"),
+        session=merged.get('session'),
         infiles=infiles_resolved,
-        backend=str(merged.get("backend", "subprocess")),
+        backend=str(merged.get('backend', 'subprocess')),
         workdir=workdir_resolved,
-        loglevel=str(merged.get("loglevel", "info")),
-        plotlevel=str(merged.get("plotlevel", "default")),
+        loglevel=str(merged.get('loglevel', 'info')),
+        plotlevel=str(merged.get('plotlevel', 'default')),
         casalog=casalog_resolved,
-        log2term=merged.get("log2term"),
-        exitstage=merged.get("exitstage"),
-        startstage=merged.get("startstage"),
-        max_tier0_workers=merged.get("max_tier0_workers"),
-        max_weblog_workers=int(merged.get("max_weblog_workers", 2)),
-        omp_num_threads=str(merged.get("omp_num_threads", "1")),
+        log2term=merged.get('log2term'),
+        exitstage=merged.get('exitstage'),
+        startstage=merged.get('startstage'),
+        max_tier0_workers=merged.get('max_tier0_workers'),
+        max_weblog_workers=int(merged.get('max_weblog_workers', 2)),
+        omp_num_threads=str(merged.get('omp_num_threads', '1')),
+        slurm_partition=merged.get('slurm_partition'),
+        slurm_account=merged.get('slurm_account'),
+        slurm_qos=merged.get('slurm_qos'),
+        slurm_constraint=merged.get('slurm_constraint'),
+        condor_project=merged.get('condor_project'),
+        condor_requirements=merged.get('condor_requirements'),
+        condor_accounting_group=merged.get('condor_accounting_group'),
         raw_config=merged,
+        slurm_tier0_memory_gb=int(merged.get('slurm_tier0_memory_gb', 32)),
+        slurm_weblog_memory_gb=int(merged.get('slurm_weblog_memory_gb', 8)),
     )
