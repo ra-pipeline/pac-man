@@ -356,6 +356,16 @@ def _run_task_sequence(
         'hsdn_importdata',
     ),
     working_dir: str | None = None,
+    *,
+    slurm_partition: str | None = None,
+    slurm_account: str | None = None,
+    slurm_qos: str | None = None,
+    slurm_constraint: str | None = None,
+    condor_project: str | None = None,
+    condor_requirements: str | None = None,
+    condor_accounting_group: str | None = None,
+    slurm_tier0_memory_gb: int = 32,
+    slurm_weblog_memory_gb: int = 8,
 ):
     """Core stage execution engine running synchronous task compute with detached QA and weblog."""
     main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
@@ -370,6 +380,15 @@ def _run_task_sequence(
             backend=backend,
             max_tier0_workers=max_tier0_workers,
             max_weblog_workers=max_weblog_workers,
+            slurm_partition=slurm_partition,
+            slurm_account=slurm_account,
+            slurm_qos=slurm_qos,
+            slurm_constraint=slurm_constraint,
+            condor_project=condor_project,
+            condor_requirements=condor_requirements,
+            condor_accounting_group=condor_accounting_group,
+            slurm_tier0_memory_gb=slurm_tier0_memory_gb,
+            slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         )
     except Exception as e:
         LOG.debug('Parsl already initialized or notice: %s', e)
@@ -619,6 +638,16 @@ def pac_man_reduce(
     max_weblog_workers: int = 2,
     casalog: str | None = None,
     log2term: bool | None = None,
+    *,
+    slurm_partition: str | None = None,
+    slurm_account: str | None = None,
+    slurm_qos: str | None = None,
+    slurm_constraint: str | None = None,
+    condor_project: str | None = None,
+    condor_requirements: str | None = None,
+    condor_accounting_group: str | None = None,
+    slurm_tier0_memory_gb: int = 32,
+    slurm_weblog_memory_gb: int = 8,
 ):
     """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
 
@@ -636,6 +665,15 @@ def pac_man_reduce(
         backend: Parsl execution backend ('subprocess', 'htcondor', 'slurm', 'threads').
         max_tier0_workers: Maximum workers to allocate for pipeline Tier0 execution.
         max_weblog_workers: Maximum workers to allocate for background weblog rendering.
+        slurm_partition: Slurm partition, inherited from the enclosing Slurm job when omitted.
+        slurm_account: Optional Slurm account.
+        slurm_qos: Optional Slurm quality of service.
+        slurm_constraint: Optional Slurm node constraint.
+        condor_project: Optional HTCondor project name.
+        condor_requirements: Optional HTCondor ClassAd requirements expression.
+        condor_accounting_group: Optional HTCondor accounting group.
+        slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
+        slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         casalog: Optional custom CASA log file path to aggregate all logging into a single file.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
@@ -666,6 +704,15 @@ def pac_man_reduce(
         backend=backend,
         max_tier0_workers=max_tier0_workers,
         max_weblog_workers=max_weblog_workers,
+        slurm_partition=slurm_partition,
+        slurm_account=slurm_account,
+        slurm_qos=slurm_qos,
+        slurm_constraint=slurm_constraint,
+        condor_project=condor_project,
+        condor_requirements=condor_requirements,
+        condor_accounting_group=condor_accounting_group,
+        slurm_tier0_memory_gb=slurm_tier0_memory_gb,
+        slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -688,6 +735,16 @@ def pac_man_executeppr(
     log2term: bool | None = None,
     startstage: int | None = None,
     exitstage: int | None = None,
+    *,
+    slurm_partition: str | None = None,
+    slurm_account: str | None = None,
+    slurm_qos: str | None = None,
+    slurm_constraint: str | None = None,
+    condor_project: str | None = None,
+    condor_requirements: str | None = None,
+    condor_accounting_group: str | None = None,
+    slurm_tier0_memory_gb: int = 32,
+    slurm_weblog_memory_gb: int = 8,
 ):
     """Executes a Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -703,6 +760,15 @@ def pac_man_executeppr(
         backend: Parsl execution backend ('subprocess', 'htcondor', 'slurm', 'threads').
         max_tier0_workers: Maximum workers to allocate for pipeline Tier0 execution.
         max_weblog_workers: Maximum workers to allocate for background weblog rendering.
+        slurm_partition: Slurm partition, inherited from the enclosing Slurm job when omitted.
+        slurm_account: Optional Slurm account.
+        slurm_qos: Optional Slurm quality of service.
+        slurm_constraint: Optional Slurm node constraint.
+        condor_project: Optional HTCondor project name.
+        condor_requirements: Optional HTCondor ClassAd requirements expression.
+        condor_accounting_group: Optional HTCondor accounting group.
+        slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
+        slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -826,6 +892,15 @@ def pac_man_executeppr(
         backend=backend,
         max_tier0_workers=max_tier0_workers,
         max_weblog_workers=max_weblog_workers,
+        slurm_partition=slurm_partition,
+        slurm_account=slurm_account,
+        slurm_qos=slurm_qos,
+        slurm_constraint=slurm_constraint,
+        condor_project=condor_project,
+        condor_requirements=condor_requirements,
+        condor_accounting_group=condor_accounting_group,
+        slurm_tier0_memory_gb=slurm_tier0_memory_gb,
+        slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -848,6 +923,16 @@ def pac_man_executevlappr(
     log2term: bool | None = None,
     startstage: int | None = None,
     exitstage: int | None = None,
+    *,
+    slurm_partition: str | None = None,
+    slurm_account: str | None = None,
+    slurm_qos: str | None = None,
+    slurm_constraint: str | None = None,
+    condor_project: str | None = None,
+    condor_requirements: str | None = None,
+    condor_accounting_group: str | None = None,
+    slurm_tier0_memory_gb: int = 32,
+    slurm_weblog_memory_gb: int = 8,
 ):
     """Executes a VLA Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -861,6 +946,15 @@ def pac_man_executevlappr(
         backend: Parsl execution backend ('subprocess', 'htcondor', 'slurm', 'threads').
         max_tier0_workers: Maximum workers to allocate for pipeline Tier0 execution.
         max_weblog_workers: Maximum workers to allocate for background weblog rendering.
+        slurm_partition: Slurm partition, inherited from the enclosing Slurm job when omitted.
+        slurm_account: Optional Slurm account.
+        slurm_qos: Optional Slurm quality of service.
+        slurm_constraint: Optional Slurm node constraint.
+        condor_project: Optional HTCondor project name.
+        condor_requirements: Optional HTCondor ClassAd requirements expression.
+        condor_accounting_group: Optional HTCondor accounting group.
+        slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
+        slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -947,6 +1041,15 @@ def pac_man_executevlappr(
         backend=backend,
         max_tier0_workers=max_tier0_workers,
         max_weblog_workers=max_weblog_workers,
+        slurm_partition=slurm_partition,
+        slurm_account=slurm_account,
+        slurm_qos=slurm_qos,
+        slurm_constraint=slurm_constraint,
+        condor_project=condor_project,
+        condor_requirements=condor_requirements,
+        condor_accounting_group=condor_accounting_group,
+        slurm_tier0_memory_gb=slurm_tier0_memory_gb,
+        slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,

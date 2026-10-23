@@ -23,6 +23,10 @@ profiles:
     loglevel: warning
     workdir: /tmp/test_workdir
     max_weblog_workers: 3
+    slurm_partition: compute
+    condor_project: demo
+    slurm_tier0_memory_gb: 64
+    slurm_weblog_memory_gb: 4
 
   alma_test:
     inherits: base
@@ -95,6 +99,10 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     assert profile.backend == "subprocess"
     assert profile.loglevel == "warning"
     assert profile.max_weblog_workers == 3
+    assert profile.slurm_partition == "compute"
+    assert profile.condor_project == "demo"
+    assert profile.slurm_tier0_memory_gb == 64
+    assert profile.slurm_weblog_memory_gb == 4
     # Overridden / set in alma_test
     assert profile.bpaction == "break"
     assert profile.ppr.endswith("test_alma_ppr.xml")
@@ -217,6 +225,10 @@ profiles:
     ppr: {ppr_file.name}
     backend: subprocess
     bpaction: break
+    slurm_partition: compute
+    condor_requirements: TARGET.HasFeature == true
+    slurm_tier0_memory_gb: 64
+    slurm_weblog_memory_gb: 4
 """,
         encoding="utf-8",
     )
@@ -230,6 +242,10 @@ profiles:
         assert kwargs["pprXmlFile"] == str(ppr_file.resolve())
         assert kwargs["bpaction"] == "break"
         assert kwargs["backend"] == "subprocess"
+        assert kwargs["slurm_partition"] == "compute"
+        assert kwargs["condor_requirements"] == "TARGET.HasFeature == true"
+        assert kwargs["slurm_tier0_memory_gb"] == 64
+        assert kwargs["slurm_weblog_memory_gb"] == 4
 
 
 def test_cli_dispatch_vla_ppr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

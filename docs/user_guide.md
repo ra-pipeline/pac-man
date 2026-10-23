@@ -46,6 +46,53 @@ context = pac_man_reduce(
 )
 ```
 
+### Scheduler Routing
+
+Scheduler routing can be configured per profile. Slurm supports
+`slurm_partition`, `slurm_account`, `slurm_qos`, and `slurm_constraint`.
+When `slurm_partition` is omitted, PAC-MAN inherits `SLURM_JOB_PARTITION` if
+the main process is itself a Slurm job; otherwise Slurm applies the user's or
+site's default partition.
+
+Slurm starts with zero allocations and requests worker blocks as tasks arrive.
+Each nonexclusive, single-node block runs one worker with one CPU.
+`max_tier0_workers` limits compute blocks (default 10 when omitted or zero),
+and `max_weblog_workers` limits weblog blocks (default 2).
+`slurm_tier0_memory_gb` (default 32 GB) and `slurm_weblog_memory_gb`
+(default 8 GB) now specify memory **per worker**, rather than per pool.
+For example, eight compute workers at 12 GB each can reserve up to 96 GB,
+but no compute resources are reserved before work arrives.
+Workers are reused across tasks. Parsl's `htex_auto_scale` strategy releases
+blocks idle for about 120 seconds, with scheduling and polling latency.
+Blocks can share nodes when the partition permits it and sufficient CPUs
+and memory are available. Resource changes apply to newly submitted
+allocations; restart the runner to use the new configuration.
+
+HTCondor has no partition concept. Use `condor_requirements` to constrain
+matching slots and `condor_project` or `condor_accounting_group` for routing
+and accounting. When the main process is an HTCondor job, omitted project and
+accounting-group values are inherited from its job ad. With no overrides,
+`condor_submit` continues to use the submit host's configured pool.
+
+```toml
+[profiles.cluster]
+inherits = "default"
+backend = "slurm"
+slurm_partition = "compute"
+slurm_account = "project-name"
+max_tier0_workers = 10
+max_weblog_workers = 2
+slurm_tier0_memory_gb = 32
+slurm_weblog_memory_gb = 8
+
+[profiles.grid]
+inherits = "default"
+backend = "htcondor"
+condor_project = "demo"
+condor_requirements = "TARGET.HasFeature == true"
+condor_accounting_group = "group.demo"
+```
+
 ### CLI Pipeline Runner
 
 PAC-MAN provides the `pipeline-test` task mapped to `scripts/test_pipeline.py`. To prevent polluting the repository root with runtime logs (`casapy.log`), plots, and checkpoints, pipeline runs are automatically isolated in `working/` when invoked from the repository root.

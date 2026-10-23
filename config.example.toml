@@ -24,6 +24,15 @@ log2term = true                   # Print CASA log output to terminal
 max_tier0_workers = 0             # Maximum concurrent workers for pipeline stages (0 for automatic)
 max_weblog_workers = 2            # Maximum concurrent workers for background weblog rendering
 omp_num_threads = "1"             # OMP/BLAS thread limit per worker process
+# slurm_partition = "compute"      # Omit to inherit $SLURM_JOB_PARTITION, then use the site default
+# slurm_account = "project-name"   # Optional Slurm account
+# slurm_qos = "normal"             # Optional Slurm quality of service
+# slurm_constraint = "cpu"         # Optional Slurm node constraint
+# slurm_tier0_memory_gb = 32       # Memory per Slurm compute worker
+# slurm_weblog_memory_gb = 8       # Memory per Slurm weblog worker
+# condor_project = "demo"          # Optional ProjectName; inherits from an enclosing Condor job
+# condor_requirements = "TARGET.HasFeature == true" # Optional ClassAd matching expression
+# condor_accounting_group = "group.demo" # Optional; inherits from an enclosing Condor job
 
 # ------------------------------------------------------------------------------
 # 2. ALMA Pipeline Processing Request (PPR)
