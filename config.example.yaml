@@ -19,6 +19,8 @@ profiles:
     workdir: working/             # Working directory for pipeline execution
     loglevel: info                # Logging verbosity: 'debug', 'info', 'warning', 'error'
     parsl_loglevel: info          # Independent Parsl console verbosity
+    parsl_monitoring: false       # Optional SQLite diagnostics for the Parsl visualizer
+    # monitoring_local_dir: "${SLURM_TMPDIR}" # Optional node-local SQLite; archived at shutdown
     plotlevel: default            # Plot level: 'default', 'summary', 'all'
     log2term: true                # Print CASA log output to terminal
     max_tier0_workers: null       # Maximum concurrent workers for pipeline stages (null for automatic)

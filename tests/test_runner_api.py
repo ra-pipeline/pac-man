@@ -50,7 +50,7 @@ def test_legacy_positional_arguments(name: str, legacy_names: list[str]) -> None
         'condor_project', 'condor_requirements', 'condor_accounting_group',
         'slurm_tier0_memory_gb', 'slurm_weblog_memory_gb',
         'slurm_walltime', 'slurm_max_idletime',
-        'parsl_loglevel', 'profile_name', 'monitoring_local_dir',
+        'parsl_loglevel', 'profile_name', 'monitoring_local_dir', 'parsl_monitoring',
         'slurm_mail_user', 'slurm_mail_type',
         'condor_schedd', 'condor_pool',
     ):

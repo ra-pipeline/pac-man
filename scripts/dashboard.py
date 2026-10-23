@@ -1,253 +1,108 @@
 from __future__ import annotations
 
+from datetime import datetime
 import os
-import sqlite3
+from pathlib import Path
 import sys
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from pac_man.monitoring import MonitoringBusyError, read_monitoring_query, resolve_monitoring_db
+from pac_man.events import read_events, workflow_frame, progress_frames
+from pac_man.telemetry import TASK_COLOR_MAP, format_task_label
 
 st.set_page_config(layout='wide', page_title='PAC-MAN Dashboard')
 
-# Discover candidate databases across common execution locations
-discovered_dbs = []
-candidates = []
-init_cwd = os.environ.get('INIT_CWD')
-if init_cwd:
-    candidates.extend([
-        os.path.join(init_cwd, 'runinfo', 'monitoring.db'),
-        os.path.join(init_cwd, 'working', 'runinfo', 'monitoring.db'),
-        os.path.join(init_cwd, 'proc', 'working', 'runinfo', 'monitoring.db'),
-    ])
-candidates.extend([
-    'runinfo/monitoring.db',
-    os.path.join('working', 'runinfo', 'monitoring.db'),
-    os.path.join('proc', 'working', 'runinfo', 'monitoring.db'),
-])
-pixi_root = os.environ.get('PIXI_PROJECT_ROOT')
-if pixi_root:
-    candidates.extend([
-        os.path.join(pixi_root, 'runinfo', 'monitoring.db'),
-        os.path.join(pixi_root, 'working', 'runinfo', 'monitoring.db'),
-        os.path.join(pixi_root, 'proc', 'working', 'runinfo', 'monitoring.db'),
-    ])
-
-seen_paths = set()
-for c in candidates:
-    abs_c = os.path.abspath(c)
-    if abs_c not in seen_paths and (os.path.exists(abs_c) or os.path.exists(os.path.splitext(abs_c)[0] + '.json')):
-        seen_paths.add(abs_c)
-        discovered_dbs.append(c)
+roots = [Path(os.environ.get('INIT_CWD', '.')), Path.cwd()]
+if os.environ.get('PIXI_PROJECT_ROOT'):
+    roots.append(Path(os.environ['PIXI_PROJECT_ROOT']))
+candidates = list(dict.fromkeys(
+    (root / relative / 'runinfo/events').resolve()
+    for root in roots for relative in (Path('.'), Path('working'), Path('proc/working'))
+))
+discovered = [path for path in candidates if path.is_dir()]
 
 if len(sys.argv) > 1:
-    DB_PATH = sys.argv[1]
-elif 'PACMAN_MONITORING_DB' in os.environ:
-    DB_PATH = os.environ['PACMAN_MONITORING_DB']
-elif discovered_dbs:
-    if len(discovered_dbs) > 1:
-        DB_PATH = st.sidebar.selectbox('Monitoring Database', discovered_dbs, index=0)
-    else:
-        DB_PATH = discovered_dbs[0]
-elif init_cwd and os.path.exists(os.path.join(init_cwd, 'runinfo', 'monitoring.db')):
-    DB_PATH = os.path.join(init_cwd, 'runinfo', 'monitoring.db')
+    event_dir = Path(sys.argv[1]).expanduser().resolve()
+elif os.environ.get('PACMAN_EVENTS_DIR'):
+    event_dir = Path(os.environ['PACMAN_EVENTS_DIR']).expanduser().resolve()
+elif os.environ.get('PACMAN_MONITORING_DB'):
+    # Preserve old launch scripts without opening their database.
+    legacy_path = Path(os.environ['PACMAN_MONITORING_DB']).expanduser().resolve()
+    event_dir = legacy_path.parent / 'events'
+    st.sidebar.caption('PACMAN_MONITORING_DB is deprecated; use PACMAN_EVENTS_DIR.')
+elif len(discovered) > 1:
+    event_dir = st.sidebar.selectbox('Progress Directory', discovered)
 else:
-    DB_PATH = os.path.join('working', 'runinfo', 'monitoring.db')
-
-
-def get_data(query: str, params: tuple | list | None = None) -> pd.DataFrame:
-    try:
-        return read_monitoring_query(DB_PATH, query, params)
-    except MonitoringBusyError as error:
-        st.warning(str(error))
-        st.stop()
-    except FileNotFoundError as error:
-        st.info(str(error))
-        st.stop()
-
+    event_dir = discovered[0] if discovered else candidates[0]
 
 st.title('PAC-MAN Execution Dashboard')
-st.caption(f'Database: `{os.path.abspath(DB_PATH)}`')
-
-auto_refresh = st.sidebar.toggle('Auto-refresh', value=True, help='Refresh progress every 30 seconds.')
+st.caption(f'Progress directory: `{event_dir}`')
+auto_refresh = st.sidebar.toggle('Auto-refresh', value=False, help='Refresh progress every 30 seconds.')
 st.button('Refresh now')
 
-try:
-    resolved_db = resolve_monitoring_db(DB_PATH)
-    st.caption(f'Reading: `{resolved_db}` (live data requires the orchestrator node)')
-    workflows = get_data('SELECT run_id, workflow_name, time_began, time_completed FROM workflow ORDER BY time_began DESC')
-except (FileNotFoundError, sqlite3.OperationalError) as error:
-    st.info(f'Telemetry is not ready: {error}. Use Refresh now after the workflow starts.')
-    st.stop()
 
-if workflows.empty:
-    st.info('No recorded workflow runs found in the monitoring database.')
-    st.stop()
+def normalize_to_local(series: pd.Series) -> pd.Series:
+    local_tz = datetime.now().astimezone().tzinfo
+    return (pd.to_datetime(series, format='mixed', utc=True)
+            .dt.tz_convert(local_tz).dt.tz_localize(None).astype('datetime64[ns]'))
 
-selected_run = st.sidebar.selectbox('Workflow Run', workflows['run_id'])
 
 @st.fragment(run_every=30 if auto_refresh else None)
 def render_progress() -> None:
-    """Refresh progress without resetting the selected workflow."""
-    # 2. Task Status Summary (status table has task_status_name)
-    status_df = get_data(
-        """
-        SELECT s.task_status_name, COUNT(DISTINCT s.task_id) as count
-        FROM status s
-        JOIN task t ON s.task_id = t.task_id AND s.run_id = t.run_id
-        WHERE t.run_id = ?
-          AND s.timestamp = (
-              SELECT MAX(s2.timestamp) FROM status s2
-              WHERE s2.task_id = s.task_id AND s2.run_id = s.run_id
-          )
-        GROUP BY s.task_status_name
-    """,
-        params=(selected_run,),
-    )
+    """Retry progress discovery on every refresh, even before the first event."""
+    events = read_events(event_dir)
+    workflows = workflow_frame(events)
+    if workflows.empty:
+        st.info('No recorded workflow runs found in the progress files. Waiting for a refresh.')
+        st.stop()
+
+    run_ids = workflows['run_id'].tolist()
+    if (st.session_state.get('workflow_directory') != str(event_dir)
+            or st.session_state.get('workflow_run') not in run_ids):
+        st.session_state['workflow_run'] = run_ids[0]
+    st.session_state['workflow_directory'] = str(event_dir)
+    selected_run = st.selectbox('Workflow Run', run_ids, key='workflow_run')
+
+    status_df, timeline, details = progress_frames(events, selected_run)
+    diagnostics = [event for event in events if event['run_id'] == selected_run and event['kind'] == 'diagnostic']
+    if diagnostics:
+        st.warning(f"Optional SQLite diagnostics unavailable: {diagnostics[-1]['message']}. Progress remains available.")
 
     cols = st.columns(len(status_df) + 1)
     cols[0].metric('Total Tasks', status_df['count'].sum())
     for i, row in status_df.iterrows():
         cols[i + 1].metric(row['task_status_name'], row['count'])
-
     if not status_df.empty:
         st.bar_chart(status_df.set_index('task_status_name'))
 
-    # 3. Gantt Timeline (both synchronous compute and asynchronous weblog rendering)
-    compute_df = pd.DataFrame()
-    try:
-        compute_df = get_data(
-            """
-            SELECT stage_number as task_id,
-                   stage_label as task_func_name,
-                   start_time as task_try_time_launched,
-                   end_time as task_try_time_returned,
-                   status as task_status,
-                   'main_process' as task_executor,
-                   hostname
-            FROM stage_execution
-            WHERE run_id = ? AND start_time IS NOT NULL
-        """,
-            params=(selected_run,),
-        )
-    except Exception:
-        pass
+    for frame in (timeline, details):
+        if not frame.empty:
+            frame['task_func_name'] = frame.apply(
+                lambda row: format_task_label(row['task_func_name'], str(row['task_executor'])), axis=1
+            )
 
-    parsl_tasks_df = pd.DataFrame()
-    try:
-        parsl_tasks_df = get_data(
-            """
-            SELECT t.task_id, t.task_func_name,
-                   tr.task_try_time_launched, tr.task_try_time_returned,
-                   (SELECT s.task_status_name FROM status s
-                    WHERE s.task_id = t.task_id AND s.run_id = t.run_id
-                    ORDER BY s.timestamp DESC LIMIT 1) as task_status,
-                   tr.task_executor,
-                   tr.hostname
-            FROM task t
-            JOIN try tr ON t.task_id = tr.task_id AND t.run_id = tr.run_id
-            WHERE t.run_id = ? AND tr.task_try_time_launched IS NOT NULL
-        """,
-            params=(selected_run,),
-        )
-    except Exception:
-        pass
-
-    from pac_man.telemetry import TASK_COLOR_MAP, format_task_label
-
-    if not parsl_tasks_df.empty:
-        parsl_tasks_df['task_func_name'] = parsl_tasks_df.apply(
-            lambda r: format_task_label(r['task_func_name'], str(r.get('task_executor', ''))), axis=1
-        )
-
-    from datetime import datetime
-
-    local_tz = datetime.now().astimezone().tzinfo
-
-
-    def normalize_to_local(series: pd.Series) -> pd.Series:
-        def _convert(val):
-            if pd.isna(val):
-                return pd.NaT
-            dt = pd.to_datetime(val, format='mixed')
-            if dt.tz is not None:
-                return dt.tz_convert(local_tz).tz_localize(None)
-            return dt
-
-        return series.apply(_convert)
-
-
-    tasks_df = pd.concat([compute_df, parsl_tasks_df], ignore_index=True)
-
-    if not tasks_df.empty:
-        tasks_df['Start'] = normalize_to_local(tasks_df['task_try_time_launched'])
-        tasks_df['Finish'] = normalize_to_local(tasks_df['task_try_time_returned']).fillna(pd.Timestamp.now())
-        tasks_df['duration_s'] = (tasks_df['Finish'] - tasks_df['Start']).dt.total_seconds().round(1)
+    if not timeline.empty:
+        timeline['Start'] = normalize_to_local(timeline['task_try_time_launched'])
+        timeline['Finish'] = normalize_to_local(timeline['task_try_time_returned']).fillna(pd.Timestamp.now())
+        timeline['duration_s'] = (timeline['Finish'] - timeline['Start']).dt.total_seconds().round(1)
         fig = px.timeline(
-            tasks_df,
-            x_start='Start',
-            x_end='Finish',
-            y='task_func_name',
-            color='task_executor',
+            timeline, x_start='Start', x_end='Finish', y='task_func_name', color='task_executor',
             color_discrete_map=TASK_COLOR_MAP,
-            hover_data=['task_id', 'task_status', 'duration_s', 'hostname'],
+            hover_data=['task_id', 'task_status', 'duration_s', 'hostname', 'try_id'],
         )
-        n_categories = tasks_df['task_func_name'].nunique()
-        fig.update_layout(height=max(500, n_categories * 26))
+        fig.update_layout(height=max(500, timeline['task_func_name'].nunique() * 26))
         fig.update_yaxes(autorange='reversed', dtick=1)
         st.plotly_chart(fig, width='stretch')
     else:
         st.info('No launched tasks found for this run.')
 
-    # 4. Raw task table
     st.subheader('Task Details')
-    raw_parsl_df = pd.DataFrame()
-    try:
-        raw_parsl_df = get_data(
-            """
-            SELECT t.task_id, t.task_func_name, t.task_time_invoked, t.task_time_returned,
-                   tr.hostname, tr.task_executor
-            FROM task t
-            LEFT JOIN try tr ON t.task_id = tr.task_id AND t.run_id = tr.run_id
-            WHERE t.run_id = ?
-            ORDER BY t.task_id
-        """,
-            params=(selected_run,),
-        )
-    except Exception:
-        pass
-
-    if not raw_parsl_df.empty:
-        raw_parsl_df['task_func_name'] = raw_parsl_df.apply(
-            lambda r: format_task_label(r['task_func_name'], str(r.get('task_executor', ''))), axis=1
-        )
-
-    raw_compute_df = pd.DataFrame()
-    try:
-        raw_compute_df = get_data(
-            """
-            SELECT stage_number as task_id,
-                   stage_label as task_func_name,
-                   start_time as task_time_invoked,
-                   end_time as task_time_returned,
-                   hostname,
-                   'main_process' as task_executor
-            FROM stage_execution
-            WHERE run_id = ?
-            ORDER BY stage_number
-        """,
-            params=(selected_run,),
-        )
-    except Exception:
-        pass
-
-    detail_df = pd.concat([raw_compute_df, raw_parsl_df], ignore_index=True)
-    if not detail_df.empty:
-        detail_df['task_time_invoked'] = normalize_to_local(detail_df['task_time_invoked'])
-        detail_df = detail_df.sort_values(by=['task_time_invoked'])
-    st.dataframe(detail_df, width='stretch')
+    if not details.empty:
+        details['task_time_invoked'] = normalize_to_local(details['task_time_invoked'])
+        details = details.sort_values('task_time_invoked')
+    st.dataframe(details, width='stretch')
 
 
 render_progress()

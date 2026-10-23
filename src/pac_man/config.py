@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -15,7 +16,10 @@ from parsl.monitoring.radios.udp import UDPRadio
 from parsl.providers import LocalProvider
 
 from pac_man.logging_utils import configure_console_logging
-from pac_man.monitoring import configure_local_monitoring, publish_monitoring_location
+from pac_man.monitoring import (
+    configure_local_monitoring, publish_monitoring_location,
+    configure_sqlite_monitoring,
+)
 from pac_man.providers import NamedCondorProvider as CondorProvider, NamedSlurmProvider as SlurmProvider
 
 _PACKAGE_SRC = str(Path(__file__).resolve().parent.parent)
@@ -141,7 +145,7 @@ class XvfbLauncher(Launcher):
         return f"env -u DBUS_SESSION_BUS_ADDRESS QT_X11_NO_MITSHM=1 xvfb-run -a -s '-screen 0 1024x768x24' {command}"
 
 
-def get_local_threads_config() -> Config:
+def get_local_threads_config(parsl_monitoring: bool = False) -> Config:
     """Returns a Parsl Config using local Python threads.
 
     WARNING: Not safe for CASA execution as CASA is not thread-safe.
@@ -164,7 +168,7 @@ def get_local_threads_config() -> Config:
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
         ],
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -175,7 +179,9 @@ WORKER_THREAD_LIMIT_ENV = (
 )
 
 
-def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: int = 2) -> Config:
+def get_local_subprocess_config(
+    max_tier0_workers: int = 4, max_weblog_workers: int = 2, parsl_monitoring: bool = False,
+) -> Config:
     """Returns a Parsl Config using local subprocesses.
 
     Safe for CASA execution since each task gets its own memory space.
@@ -204,7 +210,7 @@ def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: 
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
         ],
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -217,6 +223,7 @@ def get_condor_config(
     profile_name: str = 'pacman',
     schedd: str | None = None,
     pool: str | None = None,
+    parsl_monitoring: bool = False,
 ) -> Config:
     """Returns a Parsl Config tailored for HTCondor OSG execution.
 
@@ -274,7 +281,7 @@ def get_condor_config(
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
         ],
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -292,6 +299,7 @@ def get_slurm_config(
     profile_name: str = 'pacman',
     mail_user: str | None = None,
     mail_type: str | None = None,
+    parsl_monitoring: bool = False,
 ) -> Config:
     """Scale nonexclusive Slurm blocks on demand, with one CPU and worker per block.
 
@@ -374,7 +382,7 @@ def get_slurm_config(
         ],
         strategy='htex_auto_scale',
         max_idletime=max_idletime,
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -396,6 +404,7 @@ def initialize_parsl(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
     condor_schedd: str | None = None,
@@ -420,6 +429,7 @@ def initialize_parsl(
         slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for Slurm job names and HTCondor batch names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
         monitoring_local_dir: Local scratch root for the live monitoring database.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm notification events, e.g. BEGIN,END,FAIL.
@@ -437,18 +447,20 @@ def initialize_parsl(
         os.environ.setdefault(var, '1')
 
     if backend == 'threads':
-        config = get_local_threads_config()
+        config = get_local_threads_config(parsl_monitoring=parsl_monitoring)
     elif backend == 'subprocess':
         effective_tier0 = 4 if max_tier0_workers is None else max_tier0_workers
         config = get_local_subprocess_config(
             max_tier0_workers=effective_tier0,
             max_weblog_workers=max_weblog_workers,
+            parsl_monitoring=parsl_monitoring,
         )
     elif backend == 'htcondor':
         effective_tier0 = 50 if not max_tier0_workers else max_tier0_workers
         config = get_condor_config(
             max_tier0_workers=effective_tier0,
             max_weblog_workers=max_weblog_workers,
+            parsl_monitoring=parsl_monitoring,
             project=condor_project,
             requirements=condor_requirements,
             accounting_group=condor_accounting_group,
@@ -461,6 +473,7 @@ def initialize_parsl(
         config = get_slurm_config(
             max_tier0_workers=effective_tier0,
             max_weblog_workers=max_weblog_workers,
+            parsl_monitoring=parsl_monitoring,
             partition=slurm_partition,
             account=slurm_account,
             qos=slurm_qos,
@@ -478,6 +491,23 @@ def initialize_parsl(
             f'Unknown Parsl backend requested: {backend}. Choose from: threads, subprocess, htcondor, slurm'
         )
 
-    configure_local_monitoring(config.monitoring, monitoring_local_dir)
+    from pac_man.events import emit_event, install_event_tracking
+
+    diagnostic_error = None
+    if config.monitoring is not None:
+        try:
+            configure_local_monitoring(config.monitoring, monitoring_local_dir)
+            configure_sqlite_monitoring(config.monitoring, config.run_dir)
+        except ValueError:
+            raise
+        except Exception as error:
+            diagnostic_error = str(error)
+            logging.getLogger(__name__).warning('SQLite diagnostics unavailable; continuing with JSONL: %s', error)
+            config.monitoring = None
     dfk = parsl.load(config)
-    publish_monitoring_location(config.monitoring, dfk.run_dir)
+    install_event_tracking(dfk, profile_name)
+    dfk.pacman_sqlite_available = config.monitoring is not None
+    if config.monitoring is not None:
+        publish_monitoring_location(config.monitoring, dfk.run_dir)
+    if diagnostic_error:
+        emit_event(dfk.pacman_events_dir, dfk.run_id, 'diagnostic', message=diagnostic_error)

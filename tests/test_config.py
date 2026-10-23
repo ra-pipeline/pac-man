@@ -122,7 +122,9 @@ def test_slurm_rejects_nonpositive_resources(setting: str, value: int) -> None:
 
 def test_slurm_initialize_forwards_memory_budgets() -> None:
     """Profile resource settings reach the Slurm configuration factory."""
-    with patch.object(config, 'get_slurm_config') as factory, patch.object(config.parsl, 'load'):
+    with patch.object(config, 'get_slurm_config') as factory, patch.object(config.parsl, 'load'), \
+         patch.object(config, 'configure_sqlite_monitoring'), \
+         patch('pac_man.events.install_event_tracking'):
         config.initialize_parsl(
             backend='slurm', max_tier0_workers=0, slurm_tier0_memory_gb=64, slurm_weblog_memory_gb=4,
             slurm_mail_user='alice@example.org', slurm_mail_type='BEGIN,END,FAIL',
@@ -291,7 +293,9 @@ def test_condor_config_applies_matching_and_accounting_controls() -> None:
 
 def test_initialize_forwards_remote_condor_settings() -> None:
     """Remote queue selectors reach the HTCondor factory."""
-    with patch.object(config, 'get_condor_config') as factory, patch.object(config.parsl, 'load'):
+    with patch.object(config, 'get_condor_config') as factory, patch.object(config.parsl, 'load'), \
+         patch.object(config, 'configure_sqlite_monitoring'), \
+         patch('pac_man.events.install_event_tracking'):
         config.initialize_parsl(
             backend='htcondor', condor_schedd='schedd.example.org', condor_pool='collector.example.org',
         )
@@ -356,3 +360,16 @@ def test_condor_accounting_group_submit_dry_run(
 def test_slurm_rejects_invalid_time_limits(settings):
     with pytest.raises(ValueError):
         config.get_slurm_config(**settings)
+
+
+@pytest.mark.parametrize('factory', [
+    config.get_local_threads_config, config.get_local_subprocess_config,
+    config.get_condor_config, config.get_slurm_config,
+])
+def test_parsl_sqlite_diagnostics_require_explicit_opt_in(factory):
+    hub = Mock()
+    with patch.object(config, 'get_monitoring_hub', return_value=hub) as create:
+        assert factory().monitoring is None
+        create.assert_not_called()
+        assert factory(parsl_monitoring=True).monitoring is hub
+        create.assert_called_once()

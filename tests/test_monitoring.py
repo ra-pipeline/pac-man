@@ -29,7 +29,7 @@ def test_live_wal_database_and_final_snapshot(tmp_path: Path, monkeypatch: pytes
         shared = tmp_path / 'runinfo/monitoring.db'
         assert not shared.exists()
         assert monitoring.resolve_monitoring_db(shared) == live
-        assert monitoring.read_monitoring_query(shared, 'SELECT stage FROM progress').stage.tolist() == [1]
+        assert _read_progress(shared) == [1]
         writer.execute('INSERT INTO progress VALUES (2)')
         writer.commit()
         assert live.with_name('monitoring.db-wal').stat().st_size > 0
@@ -37,7 +37,7 @@ def test_live_wal_database_and_final_snapshot(tmp_path: Path, monkeypatch: pytes
         archive = tmp_path / 'runinfo/001/monitoring.db'
         with patch.object(monitoring.socket, 'gethostname', return_value='other-node.example.org'):
             assert monitoring.resolve_monitoring_db(shared) == archive
-            assert monitoring.read_monitoring_query(shared, 'SELECT stage FROM progress').stage.tolist() == [1, 2]
+            assert _read_progress(shared) == [1, 2]
         assert shared.is_file() and not shared.is_symlink()
         with closing(sqlite3.connect(shared)) as saved:
             assert saved.execute('PRAGMA integrity_check').fetchone() == ('ok',)
@@ -54,7 +54,7 @@ def test_wrong_node_never_reads_old_snapshot(tmp_path: Path, monkeypatch: pytest
     shared = tmp_path / 'runinfo/monitoring.db'
     shared.touch()
     with patch.object(monitoring.socket, 'gethostname', return_value='other-node.example.org'):
-        with pytest.raises(FileNotFoundError, match='Run the dashboard on that node'):
+        with pytest.raises(FileNotFoundError, match='Open the database on that node'):
             monitoring.resolve_monitoring_db(shared)
 
 
@@ -103,76 +103,64 @@ def test_failed_backup_retains_live_pointer(tmp_path: Path, monkeypatch: pytest.
     assert monitoring.resolve_monitoring_db(tmp_path / 'runinfo/monitoring.db').is_file()
 
 
-def test_lock_retry_is_bounded_and_connections_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Real exclusive-lock contention is reported without leaking failed reader connections."""
-    db = tmp_path / 'monitoring.db'
-    real_connect = sqlite3.connect
-    readers = []
-
-    def fast_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
-        kwargs['timeout'] = 0.001
-        connection = real_connect(*args, **kwargs)
-        readers.append(connection)
-        return connection
-
-    with closing(real_connect(db)) as writer:
-        writer.execute('CREATE TABLE progress (stage INTEGER)')
-        writer.commit()
-        writer.execute('BEGIN EXCLUSIVE')
-        monkeypatch.setattr(monitoring.sqlite3, 'connect', fast_connect)
-        monkeypatch.setattr(monitoring.time, 'sleep', lambda _: None)
-        with pytest.raises(monitoring.MonitoringBusyError):
-            monitoring.read_monitoring_query(db, 'SELECT * FROM progress')
-        assert len(readers) == 3
-        for reader in readers:
-            with pytest.raises(sqlite3.ProgrammingError, match='closed'):
-                reader.execute('SELECT 1')
-        writer.rollback()
-        assert monitoring.read_monitoring_query(db, 'SELECT * FROM progress').empty
-    with pytest.raises(sqlite3.OperationalError, match='no such table'):
-        monitoring.read_monitoring_query(db, 'SELECT * FROM missing_table')
-
-
 def test_initialize_configures_both_writers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The configured endpoint is present before Parsl starts and location publication follows loading."""
     monkeypatch.chdir(tmp_path)
     hub = SimpleNamespace(logging_endpoint=None)
-    cfg = SimpleNamespace(monitoring=hub)
+    cfg = SimpleNamespace(monitoring=hub, run_dir="runinfo")
     with (
         patch.object(config, 'get_local_threads_config', return_value=cfg),
+        patch('pac_man.events.install_event_tracking'),
         patch.object(config.parsl, 'load', return_value=SimpleNamespace(run_dir=str(tmp_path / 'runinfo/001'))) as load,
     ):
-        config.initialize_parsl(backend='threads', monitoring_local_dir=str(tmp_path / 'local'))
+        config.initialize_parsl(backend='threads', parsl_monitoring=True, monitoring_local_dir=str(tmp_path / 'local'))
     assert load.call_args.args[0].monitoring.logging_endpoint.startswith('sqlite:///')
     assert (tmp_path / 'runinfo/monitoring.json').exists()
 
 
-def test_dashboard_reads_live_then_archived_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Streamlit renders without errors while live storage transitions to a shared snapshot."""
-    from streamlit.testing.v1 import AppTest
+def _read_progress(path):
+    with closing(sqlite3.connect(monitoring.resolve_monitoring_db(path))) as connection:
+        return [row[0] for row in connection.execute('SELECT stage FROM progress')]
 
-    dashboard = Path(__file__).resolve().parents[1] / 'scripts/dashboard.py'
+
+def test_optional_diagnostics_use_timeout_without_preparing_schema(tmp_path):
+    from sqlalchemy import create_engine
+
+    hub = SimpleNamespace(logging_endpoint=None)
+    monitoring.configure_sqlite_monitoring(hub, str(tmp_path / 'runinfo'))
+    path = monitoring.sqlite_monitoring_path(hub.logging_endpoint)
+    assert not path.exists()
+    engine = create_engine(hub.logging_endpoint)
+    try:
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql('PRAGMA busy_timeout').scalar() == 30000
+            assert connection.exec_driver_sql('PRAGMA journal_mode').scalar() == 'delete'
+            assert connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == []
+    finally:
+        engine.dispose()
+
+
+def test_optional_parsl_monitoring_writes_database_and_snapshot(tmp_path, monkeypatch):
+    from parsl.app.app import python_app
+    from parsl.dataflow.dflow import DataFlowKernel
+    from pac_man.events import install_event_tracking
+
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr('sys.argv', [str(dashboard)])
-    hub = SimpleNamespace()
-    monitoring.configure_local_monitoring(hub, str(tmp_path / 'local'))
-    monitoring.publish_monitoring_location(hub, str(tmp_path / 'runinfo/001'))
-    monkeypatch.setenv('PACMAN_MONITORING_DB', str(tmp_path / 'runinfo/monitoring.db'))
-    with closing(sqlite3.connect(hub.pacman_location['live'])) as writer:
-        writer.executescript('''
-            CREATE TABLE workflow (run_id TEXT, workflow_name TEXT, time_began TEXT, time_completed TEXT);
-            INSERT INTO workflow VALUES ('demo', 'demo', '2026-01-01', NULL);
-            CREATE TABLE task (run_id TEXT, task_id INTEGER, task_func_name TEXT,
-                               task_time_invoked TEXT, task_time_returned TEXT);
-            CREATE TABLE status (run_id TEXT, task_id INTEGER, task_status_name TEXT, timestamp TEXT);
-            CREATE TABLE try (run_id TEXT, task_id INTEGER, task_try_time_launched TEXT,
-                              task_try_time_returned TEXT, task_executor TEXT, hostname TEXT);
-        ''')
-    app = AppTest.from_file(str(dashboard)).run(timeout=20)
-    assert not app.exception
-    assert app.metric[0].value == '0'
-    monitoring.snapshot_monitoring(hub)
-    with patch.object(monitoring.socket, 'gethostname', return_value='other-node.example.org'):
-        app.run(timeout=20)
-    assert not app.exception
-    assert app.metric[0].value == '0'
+    cfg = config.get_local_threads_config(parsl_monitoring=True)
+    cfg.run_dir = str(tmp_path / 'runinfo')
+    monitoring.configure_local_monitoring(cfg.monitoring, str(tmp_path / 'scratch'))
+    monitoring.configure_sqlite_monitoring(cfg.monitoring, cfg.run_dir)
+    dfk = DataFlowKernel(cfg)
+    install_event_tracking(dfk, 'optional-diagnostics')
+    dfk.pacman_sqlite_available = True
+    monitoring.publish_monitoring_location(cfg.monitoring, dfk.run_dir)
+    try:
+        assert python_app(abs, data_flow_kernel=dfk)(-2).result(timeout=20) == 2
+    finally:
+        dfk.cleanup()
+    monitoring.snapshot_monitoring(cfg.monitoring)
+    path = monitoring.resolve_monitoring_db(tmp_path / 'runinfo/monitoring.db')
+    with closing(sqlite3.connect(path)) as connection:
+        assert connection.execute('SELECT run_id FROM workflow').fetchone() == (dfk.run_id,)
+        assert connection.execute('SELECT COUNT(*) FROM task').fetchone() == (1,)
+        assert connection.execute("SELECT name FROM sqlite_master WHERE name='stage_execution'").fetchall() == []
