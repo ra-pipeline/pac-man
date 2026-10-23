@@ -66,6 +66,8 @@ class ResolvedProfile:
     slurm_weblog_memory_gb: int = 8
     parsl_loglevel: str = 'info'
     monitoring_local_dir: str | None = None
+    slurm_mail_user: str | None = None
+    slurm_mail_type: str | None = None
 
 
 USER_CONFIG_CANDIDATES: list[Path] = [
@@ -347,4 +349,6 @@ def load_profile(
         slurm_weblog_memory_gb=int(merged.get('slurm_weblog_memory_gb', 8)),
         parsl_loglevel=str(merged.get('parsl_loglevel', 'info')),
         monitoring_local_dir=merged.get('monitoring_local_dir'),
+        slurm_mail_user=merged.get('slurm_mail_user'),
+        slurm_mail_type=merged.get('slurm_mail_type'),
     )

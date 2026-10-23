@@ -122,11 +122,62 @@ def test_slurm_initialize_forwards_memory_budgets() -> None:
     """Profile resource settings reach the Slurm configuration factory."""
     with patch.object(config, 'get_slurm_config') as factory, patch.object(config.parsl, 'load'):
         config.initialize_parsl(
-            backend='slurm', max_tier0_workers=0, slurm_tier0_memory_gb=64, slurm_weblog_memory_gb=4
+            backend='slurm', max_tier0_workers=0, slurm_tier0_memory_gb=64, slurm_weblog_memory_gb=4,
+            slurm_mail_user='alice@example.org', slurm_mail_type='BEGIN,END,FAIL',
         )
     assert factory.call_args.kwargs['max_tier0_workers'] == 10
     assert factory.call_args.kwargs['tier0_memory_gb'] == 64
     assert factory.call_args.kwargs['weblog_memory_gb'] == 4
+    assert factory.call_args.kwargs['mail_user'] == 'alice@example.org'
+    assert factory.call_args.kwargs['mail_type'] == 'BEGIN,END,FAIL'
+
+
+@pytest.mark.parametrize(
+    'settings, directives',
+    [
+        ({}, []),
+        (dict(mail_user='alice@example.org', mail_type='begin, end,fail,BEGIN'),
+         ['#SBATCH --mail-user=alice@example.org', '#SBATCH --mail-type=BEGIN,END,FAIL']),
+        (dict(mail_type='FAIL'), ['#SBATCH --mail-type=FAIL']),
+        (dict(mail_user='alice,bob@example.org', mail_type='NONE'),
+         ['#SBATCH --mail-user=alice,bob@example.org', '#SBATCH --mail-type=NONE']),
+    ],
+)
+def test_slurm_worker_mail_submit_scripts(settings: dict, directives: list[str], tmp_path: Path) -> None:
+    """Each pool's actual submit script requests only the configured mail events."""
+    with (
+        patch.object(config.SlurmProvider, 'execute_wait', return_value=(0, 'Submitted batch job 123', '')),
+        patch.object(config, 'address_by_hostname', return_value='127.0.0.1'),
+        patch.object(config, 'get_monitoring_hub', return_value=None),
+    ):
+        cfg = config.get_slurm_config(**settings)
+        for executor in cfg.executors:
+            provider = executor.provider
+            provider.script_dir = str(tmp_path / executor.label)
+            Path(provider.script_dir).mkdir()
+            provider.submit('true', tasks_per_node=1)
+            script = next(Path(provider.script_dir).glob('parsl.slurm.*')).read_text()
+            actual = [line for line in script.splitlines() if line.startswith('#SBATCH --mail-')]
+            assert actual == directives
+
+
+@pytest.mark.parametrize(
+    'settings',
+    [
+        dict(mail_user='alice@example.org\n#SBATCH --exclusive'),
+        dict(mail_user='alice@example.org --exclusive'),
+        dict(mail_type='BEGIN\rEND'),
+        dict(mail_type='START'),
+        dict(mail_type='BEGIN,,END'),
+        dict(mail_type='NONE,FAIL'),
+    ],
+)
+def test_invalid_slurm_mail_fails_before_scheduler_access(settings: dict) -> None:
+    """Malformed mail settings fail locally before constructing a provider."""
+    with patch.object(config, 'SlurmProvider') as provider:
+        with pytest.raises(ValueError):
+            config.get_slurm_config(**settings)
+        provider.assert_not_called()
 
 
 def test_slurm_scaling_tracks_demand_and_releases_idle_blocks() -> None:
