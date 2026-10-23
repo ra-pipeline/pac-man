@@ -16,6 +16,7 @@ from pathlib import Path
 
 from pac_man import config_loader
 from pac_man.config_loader import ResolvedProfile
+from pac_man.logging_utils import configure_console_logging
 
 LOG = logging.getLogger('pac-man')
 
@@ -75,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=['debug', 'info', 'warning', 'error'],
         default=None,
         help='Override pipeline logging verbosity.',
+    )
+    parser.add_argument(
+        '--parsl-loglevel',
+        choices=['debug', 'info', 'warning', 'error', 'critical'],
+        default=None,
+        help='Override Parsl console verbosity independently of pipeline logging.',
     )
     parser.add_argument(
         '--ppr',
@@ -201,6 +208,7 @@ def execute_profile(profile: ResolvedProfile, dry_run: bool = False):
                 condor_accounting_group=profile.condor_accounting_group,
                 slurm_tier0_memory_gb=profile.slurm_tier0_memory_gb,
                 slurm_weblog_memory_gb=profile.slurm_weblog_memory_gb,
+                parsl_loglevel=profile.parsl_loglevel,
                 casalog=profile.casalog,
                 log2term=profile.log2term,
                 startstage=profile.startstage,
@@ -227,6 +235,7 @@ def execute_profile(profile: ResolvedProfile, dry_run: bool = False):
                 condor_accounting_group=profile.condor_accounting_group,
                 slurm_tier0_memory_gb=profile.slurm_tier0_memory_gb,
                 slurm_weblog_memory_gb=profile.slurm_weblog_memory_gb,
+                parsl_loglevel=profile.parsl_loglevel,
                 casalog=profile.casalog,
                 log2term=profile.log2term,
                 startstage=profile.startstage,
@@ -272,6 +281,7 @@ def execute_profile(profile: ResolvedProfile, dry_run: bool = False):
             condor_accounting_group=profile.condor_accounting_group,
             slurm_tier0_memory_gb=profile.slurm_tier0_memory_gb,
             slurm_weblog_memory_gb=profile.slurm_weblog_memory_gb,
+            parsl_loglevel=profile.parsl_loglevel,
             casalog=profile.casalog,
             log2term=profile.log2term,
         )
@@ -285,10 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    )
+    configure_console_logging()
 
     # Locate config file
     if args.config_path:
@@ -328,6 +335,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             profile.exitstage = args.exitstage
         if args.loglevel:
             profile.loglevel = args.loglevel
+        if args.parsl_loglevel:
+            profile.parsl_loglevel = args.parsl_loglevel
         if args.ppr:
             profile.ppr = str(Path(args.ppr).resolve())
         if args.procedure:
@@ -335,6 +344,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.vis:
             profile.vis = [str(Path(v).resolve()) for v in args.vis]
 
+        configure_console_logging(profile.parsl_loglevel)
         apply_preflight_environment(profile, workdir_override=args.workdir)
         execute_profile(profile, dry_run=args.dry_run)
         return 0

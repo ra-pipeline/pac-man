@@ -19,6 +19,7 @@ description = "Baseline runtime settings"
 backend = "subprocess"            # Parsl backend: 'subprocess', 'htcondor', 'slurm', 'threads'
 workdir = "working/"              # Working directory for pipeline execution
 loglevel = "info"                 # Logging verbosity: 'debug', 'info', 'warning', 'error'
+parsl_loglevel = "info"           # Independent Parsl console verbosity
 plotlevel = "default"             # Plot level: 'default', 'summary', 'all'
 log2term = true                   # Print CASA log output to terminal
 max_tier0_workers = 0             # Maximum concurrent workers for pipeline stages (0 for automatic)
