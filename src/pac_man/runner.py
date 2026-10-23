@@ -367,6 +367,7 @@ def _run_task_sequence(
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
+    profile_name: str = 'pacman',
 ):
     """Core stage execution engine running synchronous task compute with detached QA and weblog."""
     main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
@@ -391,6 +392,7 @@ def _run_task_sequence(
             slurm_tier0_memory_gb=slurm_tier0_memory_gb,
             slurm_weblog_memory_gb=slurm_weblog_memory_gb,
             parsl_loglevel=parsl_loglevel,
+            profile_name=profile_name,
         )
     except Exception as e:
         LOG.debug('Parsl already initialized or notice: %s', e)
@@ -651,6 +653,7 @@ def pac_man_reduce(
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
+    profile_name: str = 'pacman',
 ):
     """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
 
@@ -678,6 +681,7 @@ def pac_man_reduce(
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
+        profile_name: Profile prefix for scheduler display names.
         casalog: Optional custom CASA log file path to aggregate all logging into a single file.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
@@ -718,6 +722,7 @@ def pac_man_reduce(
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         parsl_loglevel=parsl_loglevel,
+        profile_name=profile_name,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -751,6 +756,7 @@ def pac_man_executeppr(
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
+    profile_name: str = 'pacman',
 ):
     """Executes a Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -776,6 +782,7 @@ def pac_man_executeppr(
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
+        profile_name: Profile prefix for scheduler display names.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -909,6 +916,7 @@ def pac_man_executeppr(
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         parsl_loglevel=parsl_loglevel,
+        profile_name=profile_name,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -942,6 +950,7 @@ def pac_man_executevlappr(
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
     parsl_loglevel: str = 'info',
+    profile_name: str = 'pacman',
 ):
     """Executes a VLA Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -965,6 +974,7 @@ def pac_man_executevlappr(
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
+        profile_name: Profile prefix for scheduler display names.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -1061,6 +1071,7 @@ def pac_man_executevlappr(
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
         parsl_loglevel=parsl_loglevel,
+        profile_name=profile_name,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
