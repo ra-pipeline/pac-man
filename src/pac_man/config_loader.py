@@ -64,6 +64,7 @@ class ResolvedProfile:
     raw_config: dict[str, Any] = field(default_factory=dict)
     slurm_tier0_memory_gb: int = 32
     slurm_weblog_memory_gb: int = 8
+    parsl_loglevel: str = 'info'
 
 
 USER_CONFIG_CANDIDATES: list[Path] = [
@@ -343,4 +344,5 @@ def load_profile(
         raw_config=merged,
         slurm_tier0_memory_gb=int(merged.get('slurm_tier0_memory_gb', 32)),
         slurm_weblog_memory_gb=int(merged.get('slurm_weblog_memory_gb', 8)),
+        parsl_loglevel=str(merged.get('parsl_loglevel', 'info')),
     )

@@ -46,6 +46,22 @@ context = pac_man_reduce(
 )
 ```
 
+### Logging
+
+Python console timestamps omit fractional seconds and retain padding so that
+`[INFO]` or `[DEBUG]` begins in the same column as CASA's `INFO1` priority.
+CASA's own log format and timestamps remain unchanged.
+
+Set `loglevel = "debug"` for detailed pipeline output and
+`parsl_loglevel = "info"` to keep Parsl console output at INFO and above.
+Parsl defaults to INFO on the console independently of the pipeline level.
+Its diagnostic files in `runinfo/` retain their existing detailed logging.
+Both settings can be overridden from the CLI:
+
+```bash
+pac-man --profile default --loglevel debug --parsl-loglevel info
+```
+
 ### Scheduler Routing
 
 Scheduler routing can be configured per profile. Slurm supports

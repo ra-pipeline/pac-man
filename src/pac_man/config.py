@@ -13,6 +13,8 @@ from parsl.monitoring.monitoring import MonitoringHub
 from parsl.monitoring.radios.udp import UDPRadio
 from parsl.providers import CondorProvider, LocalProvider, SlurmProvider
 
+from pac_man.logging_utils import configure_console_logging
+
 _PACKAGE_SRC = str(Path(__file__).resolve().parent.parent)
 
 
@@ -326,6 +328,7 @@ def initialize_parsl(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    parsl_loglevel: str = 'info',
 ) -> None:
     """Initializes Parsl with the appropriate configuration.
 
@@ -342,7 +345,9 @@ def initialize_parsl(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
     """
+    configure_console_logging(parsl_loglevel)
     for var in [
         'OMP_NUM_THREADS',
         'OPENBLAS_NUM_THREADS',

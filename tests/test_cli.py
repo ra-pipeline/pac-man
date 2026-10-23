@@ -21,6 +21,7 @@ profiles:
   base:
     backend: subprocess
     loglevel: warning
+    parsl_loglevel: error
     workdir: /tmp/test_workdir
     max_weblog_workers: 3
     slurm_partition: compute
@@ -98,6 +99,7 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     # Inherited from base
     assert profile.backend == "subprocess"
     assert profile.loglevel == "warning"
+    assert profile.parsl_loglevel == "error"
     assert profile.max_weblog_workers == 3
     assert profile.slurm_partition == "compute"
     assert profile.condor_project == "demo"
@@ -209,7 +211,14 @@ profiles:
     assert exit_code == 1
 
 
-def test_cli_dispatch_alma_ppr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    'logging_options, expected_parsl_level',
+    [([], 'info'), (['--loglevel', 'debug'], 'info'),
+     (['--loglevel', 'debug', '--parsl-loglevel', 'warning'], 'warning')],
+)
+def test_cli_dispatch_alma_ppr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logging_options: list[str], expected_parsl_level: str
+):
     """Test that ALMA PPR mode dispatches to pac_man_executeppr with resolved arguments."""
     monkeypatch.chdir(tmp_path)
     ppr_file = tmp_path / "PPR_uid___A001_X101_X101.xml"
@@ -235,7 +244,7 @@ profiles:
 
     with patch("pac_man.runner.pac_man_executeppr") as mock_exec:
         mock_exec.return_value = MagicMock()
-        exit_code = cli.main(["--config", str(cfg_file)])
+        exit_code = cli.main(["--config", str(cfg_file), *logging_options])
         assert exit_code == 0
         mock_exec.assert_called_once()
         _, kwargs = mock_exec.call_args
@@ -246,6 +255,8 @@ profiles:
         assert kwargs["condor_requirements"] == "TARGET.HasFeature == true"
         assert kwargs["slurm_tier0_memory_gb"] == 64
         assert kwargs["slurm_weblog_memory_gb"] == 4
+        assert kwargs["parsl_loglevel"] == expected_parsl_level
+        assert kwargs["loglevel"] == ('debug' if logging_options else 'info')
 
 
 def test_cli_dispatch_vla_ppr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
