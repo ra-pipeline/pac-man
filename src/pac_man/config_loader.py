@@ -68,6 +68,7 @@ class ResolvedProfile:
     slurm_max_idletime: float = 120
     parsl_loglevel: str = 'info'
     monitoring_local_dir: str | None = None
+    parsl_monitoring: bool = False
     slurm_mail_user: str | None = None
     slurm_mail_type: str | None = None
     condor_schedd: str | None = None
@@ -272,6 +273,9 @@ def load_profile(
 
     target_profile = profile_name or raw_cfg.get('default_profile') or 'default'
     merged = resolve_profile_data(profiles, target_profile)
+    parsl_monitoring = merged.get('parsl_monitoring', False)
+    if not isinstance(parsl_monitoring, bool):
+        raise ValueError('parsl_monitoring must be a boolean (true or false)')
 
     # Determine execution mode: 'ppr' or 'recipe'
     mode = merged.get('mode')
@@ -355,6 +359,7 @@ def load_profile(
         slurm_max_idletime=float(merged.get('slurm_max_idletime', 120)),
         parsl_loglevel=str(merged.get('parsl_loglevel', 'info')),
         monitoring_local_dir=merged.get('monitoring_local_dir'),
+        parsl_monitoring=parsl_monitoring,
         slurm_mail_user=merged.get('slurm_mail_user'),
         slurm_mail_type=merged.get('slurm_mail_type'),
         condor_schedd=merged.get('condor_schedd'),

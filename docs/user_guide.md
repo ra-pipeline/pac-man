@@ -238,90 +238,66 @@ jobs from separate runs that share a name.
 
 The naming applies to newly submitted jobs after restarting the runner.
 
-### Live Monitoring on Shared Filesystems
+### Live Progress and Optional Parsl Diagnostics
 
-For Lustre or other shared storage, place the active SQLite monitoring database
-on **verified node-local scratch**. Leave the pipeline working directory and
-science products on shared storage. Configure the profile with:
+The dashboard reads JSONL progress from `runinfo/events/<run-id>/`. Each process
+owns its own file; threaded writes are serialized. Events cover workflow and
+stage timing, Parsl task states and retries, and worker hostnames. Incomplete
+lines are ignored until the next refresh. The dashboard can run on any node
+with access to the shared working directory and does not open a SQLite database.
+
+Select the events directory explicitly when needed:
+
+```bash
+export PACMAN_EVENTS_DIR="$PWD/runinfo/events"
+pixi run dashboard
+```
+
+A script argument takes precedence over `PACMAN_EVENTS_DIR`. The deprecated
+`PACMAN_MONITORING_DB` variable is still accepted: its database's sibling
+`events/` directory is used, without opening the database. Auto-refresh defaults
+to off; enable it for updates every 30 seconds or click **Refresh now**.
+SQLite-only historical runs cannot be displayed in this dashboard; use the
+Parsl visualizer or the existing database export tool for those runs.
+
+Parsl's SQLite monitoring is disabled by default. Enable it independently for
+the Parsl visualizer, resource telemetry, or diagnostic database inspection:
 
 ```toml
 [profiles.demo]
 inherits = "default"
 backend = "slurm"
+parsl_monitoring = true
+# Optional: use verified node-local scratch for the active diagnostic database.
 monitoring_local_dir = "${SLURM_TMPDIR}"
 ```
 
-Environment variables in this setting expand when the pipeline starts, after
-entering the working directory. Unset variables cause an error. Alternatively,
-export `PACMAN_MONITORING_LOCAL_DIR` in the batch script. An explicit profile
-setting takes precedence. Python runners accept `monitoring_local_dir` too.
-Without either setting, the database stays in its usual shared location.
-PAC-MAN does not infer whether a directory is local: check your site's scratch
-policy, and substitute its local scratch path if `SLURM_TMPDIR` is unavailable.
-Each run gets a unique subdirectory under the chosen root. WAL mode is enabled
-only for these explicitly relocated databases.
+Python runners accept `parsl_monitoring=True` and `monitoring_local_dir` too.
+Setting a scratch directory alone does not enable SQLite monitoring. When
+monitoring is enabled, environment variables in the scratch setting expand at
+startup; unset variables produce a configuration error. Alternatively, export
+`PACMAN_MONITORING_LOCAL_DIR`; an explicit profile setting takes precedence.
+PAC-MAN does not infer whether a filesystem is local, so verify your site's
+scratch path. Each local diagnostic database uses a unique directory and WAL.
+Without a scratch setting, the optional database stays under `runinfo` using
+SQLite's default journal mode. WAL is not enabled on shared storage.
 
-PAC-MAN writes `runinfo/monitoring.json` in the working directory to identify
-the live database and its host. The dashboard discovers this file even before
-`runinfo/monitoring.db` exists. **No symlink or manual database copy is needed.**
-You can also select the shared location explicitly:
+PAC-MAN publishes `runinfo/monitoring.json` with the diagnostic database's path
+and host. Live node-local SQLite inspection requires the orchestrator node;
+this restriction does not apply to the JSONL dashboard. Parsl owns the database
+schema and writes its diagnostic tables. PAC-MAN stage events are JSONL-only;
+there is no additional stage writer, schema preflight, or database readiness
+barrier. A 30-second SQLite writer timeout reduces transient lock failures.
+Diagnostic setup or writer failures produce warnings while JSONL progress
+continues.
 
-```bash
-export PACMAN_MONITORING_DB="$PWD/runinfo/monitoring.db"
-pixi run dashboard
-```
-
-`PACMAN_MONITORING_DB` selects the dashboard input; it does not configure the
-writer. For live progress, run the dashboard on the **same node as the pipeline
-orchestrator**, not a login node or an independently scheduled worker. Access
-its web interface through your site's approved tunnel or browser connection.
-The progress panels refresh every 30 seconds by default. Turn off **Auto-refresh**
-in the sidebar to pause automatic updates; **Refresh now** still works. Use it if the
-dashboard starts before the database/schema is ready or to reload workflow
-choices. Database locks receive bounded retries and a status message instead
-of a traceback; panel refreshes retry automatically.
-
-For example, inside a single-node Slurm batch allocation, after changing into
-the shared working directory and preparing inputs:
-
-```bash
-#!/bin/bash
-# Use the site's actual node-local scratch variable/path.
-export PACMAN_MONITORING_LOCAL_DIR="${SLURM_TMPDIR:?node-local scratch must be set}"
-export PACMAN_MONITORING_DB="$PWD/runinfo/monitoring.db"
-export PIXI_FROZEN=true
-export PIXI_NO_INSTALL=true
-pacman_manifest=/path/to/pac-man/pixi.toml
-
-# Background the web server so the pipeline can run alongside it on this node.
-pixi run --manifest-path "$pacman_manifest" dashboard >dashboard.out 2>&1 &
-dashboard_pid=$!
-trap 'kill "$dashboard_pid" 2>/dev/null || true' EXIT
-
-pipeline_status=0
-pixi run --manifest-path "$pacman_manifest" pac-man -p demo || pipeline_status=$?
-exit "$pipeline_status"
-```
-
-This example stops the dashboard when the pipeline exits. To inspect progress
-afterward, start a new dashboard against the saved shared database. Allocate
-enough orchestrator resources for the dashboard as well as the main process;
-avoid overlapping runs in the same working directory.
-
-After Parsl cleanup finishes, PAC-MAN uses SQLite's backup API to include
-committed WAL contents in a consistent snapshot. It atomically publishes a
-per-run archive at `runinfo/<Parsl-run-directory>/monitoring.db` (for example,
-`runinfo/000/monitoring.db`) and a copy at `runinfo/monitoring.db`. The location
-file switches dashboard readers to the completed archive, which can be read
-from any node with access to the shared directory. Earlier per-run archives
-remain available; select their database paths explicitly to inspect older runs.
-
-Ordinary pipeline failures that reach shutdown also save a snapshot. Forced
-termination, node failure, or a walltime kill can prevent finalization; this is
-not a continuously replicated database. Snapshot failures emit a warning and
-retain the live database for recovery. Local scratch copies are not removed by
-PAC-MAN; their lifetime follows site cleanup policy. A dashboard running only
-after the pipeline exits can read the shared snapshot without local scratch.
+After Parsl cleanup, local SQLite diagnostics are backed up consistently to
+`runinfo/<Parsl-run-directory>/monitoring.db` (for example,
+`runinfo/000/monitoring.db`) and copied to `runinfo/monitoring.db`. The location
+metadata switches to the completed snapshot. These closed snapshots can be
+inspected from any node with access to shared storage. Snapshot failures retain
+the local database for recovery. Forced termination or node failure can prevent
+the final snapshot; local scratch lifetime follows site cleanup policy.
 
 ### CLI Pipeline Runner
 
@@ -414,7 +390,11 @@ Launch the [Streamlit](https://streamlit.io/) monitoring dashboard to track stag
 ```bash
 pixi run dashboard
 ```
-The dashboard runs at `http://localhost:8502` and automatically discovers telemetry from `working/runinfo/monitoring.db`.
+The dashboard uses the port printed by Streamlit (normally `8501`). It discovers
+`runinfo/events/` in the working directory. Set `PACMAN_EVENTS_DIR` or pass an
+events-directory argument to choose another location. Live progress does not
+require the orchestrator node. Optional SQLite diagnostic failures appear as
+warnings while progress continues to render.
 
 ![PAC-MAN Execution Dashboard](assets/dashboard_preview.png)
 
@@ -427,13 +407,14 @@ The dashboard runs at `http://localhost:8502` and automatically discovers teleme
 
 </details>
 
-To refresh or regenerate the static timeline asset from a completed pipeline run:
+The static export currently requires SQLite telemetry. To regenerate its timeline asset from a completed pipeline run:
 ```bash
 pixi run export-dashboard
 ```
 
 ### Parsl Visualizer
-Launch Parsl's built-in DAG [visualizer](https://parsl.readthedocs.io/en/stable/userguide/monitoring.html):
+Enable `parsl_monitoring = true` before running the pipeline, then launch
+Parsl's built-in DAG [visualizer](https://parsl.readthedocs.io/en/stable/userguide/monitoring.html):
 
 ```bash
 pixi run visualize

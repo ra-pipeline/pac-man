@@ -13,8 +13,6 @@ import datetime
 import logging
 import os
 import platform
-import sqlite3
-from contextlib import closing
 
 import parsl
 from parsl.app.app import python_app
@@ -31,71 +29,11 @@ except ImportError:
 
 # Import pac-man config to initialize parsl
 from pac_man.config import initialize_parsl
+from pac_man.events import record_stage
 from pac_man.monitoring import snapshot_monitoring
 
 # Pipeline imports moved into pac_man_reduce to avoid early CASA initialization in remote workers
 LOG = logging.getLogger(__name__)
-
-
-def _log_stage_execution(
-    db_path: str,
-    run_id: str,
-    stage_number: int,
-    task_name: str,
-    stage_label: str,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime | None,
-    status: str,
-) -> None:
-    """Records synchronous main-process pipeline compute stage events into monitoring database."""
-    try:
-        abs_db_path = os.path.abspath(db_path)
-        os.makedirs(os.path.dirname(abs_db_path), exist_ok=True)
-        with closing(sqlite3.connect(abs_db_path, timeout=30.0)) as conn, conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS stage_execution (
-                    run_id TEXT,
-                    stage_number INTEGER,
-                    task_name TEXT,
-                    stage_label TEXT,
-                    start_time TIMESTAMP,
-                    end_time TIMESTAMP,
-                    status TEXT,
-                    hostname TEXT
-                )
-            """)
-            start_time_val = start_time.isoformat() if isinstance(start_time, datetime.datetime) else start_time
-            end_time_val = end_time.isoformat() if isinstance(end_time, datetime.datetime) else end_time
-
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT rowid FROM stage_execution WHERE run_id = ? AND stage_number = ?',
-                (run_id, stage_number),
-            )
-            row = cursor.fetchone()
-            if row:
-                conn.execute(
-                    'UPDATE stage_execution SET end_time = ?, status = ? WHERE rowid = ?',
-                    (end_time_val, status, row[0]),
-                )
-            else:
-                conn.execute(
-                    """INSERT INTO stage_execution 
-                       (run_id, stage_number, task_name, stage_label, start_time, end_time, status, hostname)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        run_id,
-                        stage_number,
-                        task_name,
-                        stage_label,
-                        start_time_val,
-                        end_time_val,
-                        status,
-                        platform.node(),
-                    ),
-                )
-    except Exception as e:
-        LOG.debug('Failed to record stage telemetry: %s', e)
 
 
 def _configure_casalog(
@@ -371,6 +309,7 @@ def _run_task_sequence(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
     condor_schedd: str | None = None,
@@ -403,6 +342,7 @@ def _run_task_sequence(
             parsl_loglevel=parsl_loglevel,
             profile_name=profile_name,
             monitoring_local_dir=monitoring_local_dir,
+            parsl_monitoring=parsl_monitoring,
             slurm_mail_user=slurm_mail_user,
             slurm_mail_type=slurm_mail_type,
             condor_schedd=condor_schedd,
@@ -416,12 +356,6 @@ def _run_task_sequence(
         LOG.debug('Parsl already initialized or notice: %s', e)
 
     dfk = parsl.dfk()
-    run_id = dfk.run_id
-    monitoring_endpoint = (
-        getattr(dfk.config.monitoring, 'logging_endpoint', 'sqlite:///runinfo/monitoring.db')
-        or 'sqlite:///runinfo/monitoring.db'
-    )
-    monitoring_db_path = monitoring_endpoint.replace('sqlite:///', '')
 
     basetask.DISABLE_QA = True
     basetask.DISABLE_WEBLOG = False
@@ -473,9 +407,9 @@ def _run_task_sequence(
 
             stage_metadata = f'Stage_{procedure_stage_nr:03d}_{task_name}'
             stage_start_time = datetime.datetime.now()
-            _log_stage_execution(
-                db_path=monitoring_db_path,
-                run_id=run_id,
+            record_stage(
+                dfk=dfk,
+                hostname=platform.node(),
                 stage_number=procedure_stage_nr,
                 task_name=task_name,
                 stage_label=f'{stage_metadata} [compute]',
@@ -524,9 +458,9 @@ def _run_task_sequence(
                             exc_info=True,
                         )
 
-                _log_stage_execution(
-                    db_path=monitoring_db_path,
-                    run_id=run_id,
+                record_stage(
+                    dfk=dfk,
+                    hostname=platform.node(),
                     stage_number=procedure_stage_nr,
                     task_name=task_name,
                     stage_label=f'{stage_metadata} [compute]',
@@ -541,9 +475,9 @@ def _run_task_sequence(
                     raise exceptions.PipelineException(previous_tracebacks_as_string)
 
             except Exception:
-                _log_stage_execution(
-                    db_path=monitoring_db_path,
-                    run_id=run_id,
+                record_stage(
+                    dfk=dfk,
+                    hostname=platform.node(),
                     stage_number=procedure_stage_nr,
                     task_name=task_name,
                     stage_label=f'{stage_metadata} [compute]',
@@ -605,42 +539,44 @@ def _run_task_sequence(
                 break
 
     finally:
-        LOG.info('Saving final context...')
-        cli.h_save()
-
-        LOG.info('PAC-MAN: Waiting for any remaining background rendering tasks to finish...')
-        for future in background_futures:
-            future.result()
-        LOG.info('PAC-MAN: All background tasks complete. Workflow finished!')
-
-        if atrium_ctx is not None and atrium_storage_dir:
-            try:
-                from atrium.adapters.pipeline import export_timetracker_json
-
-                atrium_ctx = RunContext.load(run_id=context.name, storage_dir=atrium_storage_dir)
-                final_chk = atrium_ctx.checkpoint()
-                LOG.info(
-                    'Atrium: Final context state version %d (%d datasets, %d cal entries, checkpoint: %s)',
-                    atrium_ctx.version,
-                    len(atrium_ctx.snapshot.datasets),
-                    len(atrium_ctx.snapshot.cal_library),
-                    final_chk.name,
-                )
-                summary_df = atrium_ctx.metrics.task_summary()
-                if not summary_df.is_empty():
-                    LOG.info('Atrium Task Execution Summary:\n%s', summary_df)
-
-                tt_path = os.path.join(context.output_dir, f'{context.name}.timetracker.json')
-                export_timetracker_json(atrium_ctx, tt_path)
-                LOG.info('Atrium: Exported compatibility timetracker JSON to %s', tt_path)
-            except Exception as metrics_err:
-                LOG.debug('Atrium metrics summary skipped: %s', metrics_err)
-
         try:
-            dfk.cleanup()
-            snapshot_monitoring(dfk.config.monitoring)
-        except Exception as parsl_err:
-            LOG.warning('Parsl cleanup or monitoring snapshot failed: %s', parsl_err)
+            LOG.info('Saving final context...')
+            cli.h_save()
+
+            LOG.info('PAC-MAN: Waiting for any remaining background rendering tasks to finish...')
+            for future in background_futures:
+                future.result()
+            LOG.info('PAC-MAN: All background tasks complete. Workflow finished!')
+
+            if atrium_ctx is not None and atrium_storage_dir:
+                try:
+                    from atrium.adapters.pipeline import export_timetracker_json
+
+                    atrium_ctx = RunContext.load(run_id=context.name, storage_dir=atrium_storage_dir)
+                    final_chk = atrium_ctx.checkpoint()
+                    LOG.info(
+                        'Atrium: Final context state version %d (%d datasets, %d cal entries, checkpoint: %s)',
+                        atrium_ctx.version,
+                        len(atrium_ctx.snapshot.datasets),
+                        len(atrium_ctx.snapshot.cal_library),
+                        final_chk.name,
+                    )
+                    summary_df = atrium_ctx.metrics.task_summary()
+                    if not summary_df.is_empty():
+                        LOG.info('Atrium Task Execution Summary:\n%s', summary_df)
+
+                    tt_path = os.path.join(context.output_dir, f'{context.name}.timetracker.json')
+                    export_timetracker_json(atrium_ctx, tt_path)
+                    LOG.info('Atrium: Exported compatibility timetracker JSON to %s', tt_path)
+                except Exception as metrics_err:
+                    LOG.debug('Atrium metrics summary skipped: %s', metrics_err)
+
+        finally:
+            try:
+                dfk.cleanup()
+                snapshot_monitoring(dfk.config.monitoring)
+            except Exception as parsl_err:
+                LOG.warning('Parsl cleanup or monitoring snapshot failed: %s', parsl_err)
 
     return context
 
@@ -676,6 +612,7 @@ def pac_man_reduce(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
     condor_schedd: str | None = None,
@@ -710,6 +647,7 @@ def pac_man_reduce(
         slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
@@ -759,6 +697,7 @@ def pac_man_reduce(
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
+        parsl_monitoring=parsl_monitoring,
         slurm_mail_user=slurm_mail_user,
         slurm_mail_type=slurm_mail_type,
         condor_schedd=condor_schedd,
@@ -800,6 +739,7 @@ def pac_man_executeppr(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
     condor_schedd: str | None = None,
@@ -832,6 +772,7 @@ def pac_man_executeppr(
         slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
@@ -974,6 +915,7 @@ def pac_man_executeppr(
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
+        parsl_monitoring=parsl_monitoring,
         slurm_mail_user=slurm_mail_user,
         slurm_mail_type=slurm_mail_type,
         condor_schedd=condor_schedd,
@@ -1015,6 +957,7 @@ def pac_man_executevlappr(
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
     monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
     slurm_mail_user: str | None = None,
     slurm_mail_type: str | None = None,
     condor_schedd: str | None = None,
@@ -1045,6 +988,7 @@ def pac_man_executevlappr(
         slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
         monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
         slurm_mail_user: Worker notification recipient (login or email address).
         slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
@@ -1150,6 +1094,7 @@ def pac_man_executevlappr(
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
         monitoring_local_dir=monitoring_local_dir,
+        parsl_monitoring=parsl_monitoring,
         slurm_mail_user=slurm_mail_user,
         slurm_mail_type=slurm_mail_type,
         condor_schedd=condor_schedd,

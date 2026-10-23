@@ -23,6 +23,7 @@ profiles:
     loglevel: warning
     parsl_loglevel: error
     monitoring_local_dir: /tmp/demo-scratch
+    parsl_monitoring: true
     workdir: /tmp/test_workdir
     max_weblog_workers: 3
     slurm_partition: compute
@@ -108,6 +109,7 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     assert profile.loglevel == "warning"
     assert profile.parsl_loglevel == "error"
     assert profile.monitoring_local_dir == "/tmp/demo-scratch"
+    assert profile.parsl_monitoring is True
     assert profile.max_weblog_workers == 3
     assert profile.slurm_partition == "compute"
     assert profile.slurm_mail_user == "alice@example.org"
@@ -253,6 +255,7 @@ profiles:
     slurm_walltime: "08:30:00"
     slurm_max_idletime: 600
     monitoring_local_dir: /tmp/demo-scratch
+    parsl_monitoring: true
     slurm_mail_user: alice@example.org
     slurm_mail_type: BEGIN,END,FAIL
     condor_schedd: schedd.example.org
@@ -279,6 +282,7 @@ profiles:
         assert kwargs["parsl_loglevel"] == expected_parsl_level
         assert kwargs["profile_name"] == "default"
         assert kwargs["monitoring_local_dir"] == "/tmp/demo-scratch"
+        assert kwargs["parsl_monitoring"] is True
         assert kwargs["slurm_mail_user"] == "alice@example.org"
         assert kwargs["slurm_mail_type"] == "BEGIN,END,FAIL"
         assert kwargs["condor_schedd"] == "schedd.example.org"
@@ -347,3 +351,17 @@ profiles:
         assert kwargs["procedure"] == "procedure_hifv.xml"
         assert kwargs["profile_name"] == "default"
         assert len(kwargs["vis"]) == 2
+
+
+@pytest.mark.parametrize('setting, expected', [('', False), ('parsl_monitoring = false', False), ('parsl_monitoring = true', True)])
+def test_parsl_diagnostics_profile_opt_in(tmp_path, setting, expected):
+    path = tmp_path / 'config.toml'
+    path.write_text('[profiles.default]\nmode = "recipe"\nprocedure = "demo.xml"\n' + setting + '\n')
+    assert config_loader.load_profile(path).parsl_monitoring is expected
+
+
+def test_parsl_diagnostics_rejects_string_boolean(tmp_path):
+    path = tmp_path / 'config.toml'
+    path.write_text('[profiles.default]\nmode = "recipe"\nparsl_monitoring = "false"\n')
+    with pytest.raises(ValueError, match='parsl_monitoring must be a boolean'):
+        config_loader.load_profile(path)

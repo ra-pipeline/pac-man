@@ -1,4 +1,4 @@
-"""Local monitoring storage, shared snapshots, and bounded dashboard reads."""
+"""Optional Parsl SQLite diagnostics: local storage, discovery and final snapshots."""
 
 from __future__ import annotations
 
@@ -14,17 +14,16 @@ import tempfile
 import time
 from typing import Any
 
-import pandas as pd
 
 LOG = logging.getLogger(__name__)
 
 
-class MonitoringBusyError(RuntimeError):
-    """The monitoring database remained busy after bounded retries."""
+class MonitoringSnapshotError(RuntimeError):
+    """A consistent diagnostic snapshot could not be completed in time."""
 
 
 def _write_location(path: Path, location: dict[str, str]) -> None:
-    """Atomically publish location metadata to dashboard readers."""
+    """Atomically publish location metadata to diagnostic readers."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
         temporary = Path(stream.name)
@@ -70,7 +69,7 @@ def publish_monitoring_location(hub: Any, run_dir: str) -> None:
         endpoint = getattr(hub, 'logging_endpoint', None)
         if isinstance(endpoint, str) and endpoint.startswith('sqlite:///'):
             _write_location(Path('runinfo/monitoring.json'), {
-                'state': 'shared', 'live': str(Path(endpoint.removeprefix('sqlite:///')).resolve()),
+                'state': 'shared', 'live': str(sqlite_monitoring_path(endpoint)),
             })
         return
     location['snapshot'] = str(Path(run_dir).resolve() / 'monitoring.db')
@@ -79,7 +78,7 @@ def publish_monitoring_location(hub: Any, run_dir: str) -> None:
 
 
 def snapshot_monitoring(hub: Any) -> None:
-    """Save a consistent snapshot after Parsl cleanup, then switch dashboard readers.
+    """Save a consistent snapshot after Parsl cleanup, then switch diagnostic readers.
 
     The local database is retained for recovery if snapshot publication fails.
     """
@@ -95,7 +94,7 @@ def snapshot_monitoring(hub: Any) -> None:
 
     def check_timeout(status: int, remaining: int, total: int) -> None:
         if time.monotonic() > deadline:
-            raise MonitoringBusyError('Timed out saving monitoring snapshot; local database retained')
+            raise MonitoringSnapshotError('Timed out saving monitoring snapshot; local database retained')
 
     try:
         with closing(sqlite3.connect(live.as_uri() + '?mode=ro', uri=True, timeout=5)) as source:
@@ -120,7 +119,7 @@ def snapshot_monitoring(hub: Any) -> None:
 
 
 def resolve_monitoring_db(db_path: str | Path) -> Path:
-    """Resolve a shared dashboard path to a live local DB or completed snapshot."""
+    """Resolve a shared diagnostic path to a live local DB or completed snapshot."""
     path = Path(db_path).expanduser().absolute()
     marker = path.with_suffix('.json')
     if marker.is_file():
@@ -131,7 +130,7 @@ def resolve_monitoring_db(db_path: str | Path) -> Path:
             path = Path(location['snapshot'])
         elif location['hostname'] != socket.gethostname():
             raise FileNotFoundError(
-                f"Live monitoring is on node {location['hostname']}. Run the dashboard on that node; "
+                f"Live monitoring is on node {location['hostname']}. Open the database on that node; "
                 'a shared snapshot will be available after the pipeline exits.'
             )
         else:
@@ -141,18 +140,22 @@ def resolve_monitoring_db(db_path: str | Path) -> Path:
     return path
 
 
-def read_monitoring_query(db_path: str | Path, query: str, params: tuple | list | None = None) -> pd.DataFrame:
-    """Read telemetry with fresh connections and bounded retries for lock contention."""
-    for attempt in range(3):
-        path = resolve_monitoring_db(db_path)
-        try:
-            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=2)) as connection:
-                cursor = connection.execute(query, params or ())
-                return pd.DataFrame.from_records(cursor.fetchall(), columns=[column[0] for column in cursor.description])
-        except sqlite3.OperationalError as error:
-            if 'locked' not in str(error).lower() and 'busy' not in str(error).lower():
-                raise
-            if attempt == 2:
-                raise MonitoringBusyError('Monitoring database is busy; retrying on the next dashboard refresh') from error
-            time.sleep(0.2 * (attempt + 1))
-    raise AssertionError('Unreachable')
+def sqlite_monitoring_path(endpoint: str) -> Path:
+    """Extract the filename without treating SQLite URL options as part of it."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(endpoint)
+    if url.get_backend_name() != 'sqlite' or not url.database or url.database == ':memory:':
+        raise ValueError('PAC-MAN monitoring requires a file-backed SQLite database')
+    return Path(url.database).expanduser().resolve()
+
+
+def configure_sqlite_monitoring(hub: Any, run_dir: str) -> None:
+    """Give Parsl's diagnostic writer a longer lock timeout without schema writes."""
+    from sqlalchemy.engine import make_url
+
+    endpoint = hub.logging_endpoint or f'sqlite:///{Path(run_dir).resolve() / "monitoring.db"}'
+    path = sqlite_monitoring_path(endpoint)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    url = make_url(endpoint).set(database=str(path)).update_query_dict({'timeout': '30'})
+    hub.logging_endpoint = url.render_as_string(hide_password=False)
