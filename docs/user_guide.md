@@ -447,6 +447,13 @@ events-directory argument to choose another location. Live progress does not
 require the orchestrator node. Optional SQLite diagnostic failures appear as
 warnings while progress continues to render.
 
+Tier0 functions show one thin strip per launched task attempt, with each strip
+using its own start and finish times. Group labels count distinct tasks and show
+their latest states, including tasks still waiting to launch. Use **Expand Tier0
+task groups** to give selected groups a full-height row per attempt. Hover over
+a strip for its task ID, attempt number, status, hostname, and duration. Retries
+have separate strips but count as one task in the group summary.
+
 ![PAC-MAN Execution Dashboard](assets/dashboard_preview.png)
 
 #### Interactive Timeline Widget

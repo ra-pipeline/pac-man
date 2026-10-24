@@ -120,3 +120,62 @@ def test_timeline_keeps_compute_above_tier0_and_weblog_across_refreshes(tmp_path
         app.run()
         assert not app.exception
         assert list(figures[-1].layout.yaxis.categoryarray) == expected[:2] + ['Stage_003 [compute]'] + expected[2:]
+
+
+def test_tier0_tasks_have_individual_strips_counts_and_expandable_rows(tmp_path, monkeypatch):
+    import plotly.express as px
+
+    directory = tmp_path / 'events'
+    monkeypatch.setattr('sys.argv', ['dashboard.py'])
+    monkeypatch.setenv('PACMAN_EVENTS_DIR', str(directory))
+    events.emit_event(directory, 'run', 'workflow', workflow_name='test', state='running')
+    for task_id, attempt, state, start, finish in [
+        (1, 0, 'fail_retryable', 1, 3),
+        (1, 1, 'running', 4, None),
+        (2, 0, 'exec_done', 2, 5),
+        (3, 0, 'pending', None, None),
+    ]:
+        timing = {}
+        if start is not None:
+            timing['task_try_time_launched'] = f'2026-01-01T00:00:0{start}+00:00'
+        if finish is not None:
+            timing['task_try_time_returned'] = f'2026-01-01T00:00:0{finish}+00:00'
+        events.emit_event(directory, 'run', 'task', task_id=task_id, try_id=attempt,
+                          task_func_name='clean', task_executor='tier0_executor', state=state,
+                          task_time_invoked='2026-01-01T00:00:00+00:00', **timing)
+    figures = []
+    original = px.timeline
+
+    def capture(*args, **kwargs):
+        figure = original(*args, **kwargs)
+        figures.append(figure)
+        return figure
+
+    with patch.object(px, 'timeline', side_effect=capture):
+        app = AppTest.from_file(str(DASHBOARD), default_timeout=20).run()
+        assert not app.exception
+        figure = figures[-1]
+        trace = figure.data[0]
+        assert len(trace.y) == 3  # Queued task has no execution strip yet.
+        assert len(set(trace.y)) == 1
+        assert sorted(trace.offset) == pytest.approx([-0.4, -0.4 + 0.8 / 3, -0.4 + 1.6 / 3])
+        assert list(trace.width) == pytest.approx([0.8 / 3] * 3)
+        assert len(set(trace.base)) == 3  # Individual start times survive grouping.
+        label = figure.layout.yaxis.ticktext[0]
+        assert '3 tasks' in label
+        assert all(text in label for text in ['1 running', '1 completed', '1 pending'])
+        assert 'hostname' in trace.hovertemplate
+        assert 'try_id' in trace.hovertemplate
+        app.multiselect[0].select('clean [tier0 subtask]').run()
+        assert not app.exception
+        expanded = figures[-1]
+        assert len(set(expanded.data[0].y)) == 3
+        assert list(expanded.data[0].width) == pytest.approx([0.8] * 3)
+        assert list(expanded.layout.yaxis.categoryarray) == [
+            'clean [tier0 subtask] / task 1 / attempt 0',
+            'clean [tier0 subtask] / task 1 / attempt 1',
+            'clean [tier0 subtask] / task 2 / attempt 0',
+        ]
+        app.multiselect[0].unselect('clean [tier0 subtask]').run()
+        assert not app.exception
+        assert len(set(figures[-1].data[0].y)) == 1

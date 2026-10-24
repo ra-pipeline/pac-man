@@ -49,6 +49,40 @@ def normalize_to_local(series: pd.Series) -> pd.Series:
             .dt.tz_convert(local_tz).dt.tz_localize(None).astype('datetime64[ns]'))
 
 
+def tier0_strips(timeline, details, expanded):
+    """Give every attempt its own strip while keeping function groups compact."""
+    timeline = timeline.copy()
+    timeline['lane'] = timeline['task_func_name']
+    timeline['strip_offset'] = -0.4
+    timeline['strip_width'] = 0.8
+    labels = {}
+    tier0 = timeline[timeline['task_executor'] == 'tier0_executor']
+    for name, group in tier0.groupby('task_func_name', sort=False):
+        group = group.sort_values(['task_id', 'try_id'], kind='stable')
+        tasks = details[(details['task_executor'] == 'tier0_executor')
+                        & (details['task_func_name'] == name)]
+        latest = tasks.sort_values('try_id').drop_duplicates('task_id', keep='last')
+        states = latest['task_status'].replace({
+            'exec_done': 'completed', 'memo_done': 'cached', 'launched': 'starting',
+        }).value_counts()
+        summary = ' · '.join(f'{count} {state}' for state, count in states.items())
+        labels[name] = f'{name} — {len(latest)} tasks · {summary}'
+        for position, index in enumerate(group.index):
+            if name in expanded:
+                row = group.loc[index]
+                lane = f"{name} / task {row['task_id']} / attempt {row['try_id']}"
+                timeline.at[index, 'lane'] = lane
+                labels[lane] = f"  Task {row['task_id']} · attempt {row['try_id']}"
+            else:
+                timeline.at[index, 'strip_offset'] = -0.4 + position * 0.8 / len(group)
+                timeline.at[index, 'strip_width'] = 0.8 / len(group)
+        if name in expanded:
+            # Put the group summary on the first attempt instead of adding an empty bar.
+            first_lane = timeline.at[group.index[0], 'lane']
+            labels[first_lane] = f'{labels[name]} / {labels[first_lane].strip()}'
+    return timeline, labels
+
+
 @st.fragment(run_every=30 if auto_refresh else None)
 def render_progress() -> None:
     """Retry progress discovery on every refresh, even before the first event."""
@@ -87,22 +121,38 @@ def render_progress() -> None:
         timeline['Start'] = normalize_to_local(timeline['task_try_time_launched'])
         timeline['Finish'] = normalize_to_local(timeline['task_try_time_returned']).fillna(pd.Timestamp.now())
         timeline['duration_s'] = (timeline['Finish'] - timeline['Start']).dt.total_seconds().round(1)
+        groups = timeline.loc[timeline['task_executor'] == 'tier0_executor', 'task_func_name'].drop_duplicates().tolist()
+        expanded = st.multiselect(
+            'Expand Tier0 task groups', groups,
+            help='Each compact group contains one strip per task attempt. Expand a group for full-height task rows.',
+        ) if groups else []
+        timeline, lane_labels = tier0_strips(timeline, details, expanded)
         executor_order = list(TASK_COLOR_MAP)
         row_order = (
             timeline.assign(_executor_order=timeline['task_executor'].map(
                 {executor: index for index, executor in enumerate(executor_order)}
             ).fillna(len(executor_order)))
-            .sort_values(['_executor_order', 'Start', 'task_func_name'], kind='stable')
-            ['task_func_name'].drop_duplicates().tolist()
+            .assign(_group_start=lambda frame: frame.groupby(['task_executor', 'task_func_name'])['Start'].transform('min'))
+            .sort_values(['_executor_order', '_group_start', 'task_func_name', 'task_id', 'try_id'], kind='stable')
+            ['lane'].drop_duplicates().tolist()
         )
         fig = px.timeline(
-            timeline, x_start='Start', x_end='Finish', y='task_func_name', color='task_executor',
+            timeline, x_start='Start', x_end='Finish', y='lane', color='task_executor',
             color_discrete_map=TASK_COLOR_MAP,
             category_orders={'task_executor': executor_order},
+            hover_name='task_func_name',
             hover_data=['task_id', 'task_status', 'duration_s', 'hostname', 'try_id'],
         )
-        fig.update_layout(height=max(500, timeline['task_func_name'].nunique() * 26))
-        fig.update_yaxes(autorange='reversed', dtick=1, categoryorder='array', categoryarray=row_order)
+        for trace in fig.data:
+            rows = timeline[timeline['task_executor'] == trace.name]
+            trace.offset = rows['strip_offset'].tolist()
+            trace.width = rows['strip_width'].tolist()
+            trace.marker.line.width = 0.5
+            trace.marker.line.color = 'rgba(255,255,255,0.6)'
+        fig.update_layout(barmode='overlay', height=max(500, len(row_order) * 30))
+        fig.update_yaxes(title=None, autorange='reversed', dtick=1, categoryorder='array', categoryarray=row_order,
+                         tickmode='array', tickvals=row_order,
+                         ticktext=[lane_labels.get(lane, lane) for lane in row_order])
         st.plotly_chart(fig, width='stretch')
     else:
         st.info('No launched tasks found for this run.')
