@@ -34,6 +34,7 @@ class ResolvedProfile:
     telescope: str = 'alma'  # 'alma' or 'vla'
     # PPR settings
     ppr: str | None = None
+    rawdata: str | None = None
     importonly: bool = False
     bp_name: str = 'breakpoint'
     bpaction: str = 'ignore'
@@ -44,7 +45,7 @@ class ResolvedProfile:
     infiles: list[str] = field(default_factory=list)
     # Execution & Runtime settings
     backend: str = 'subprocess'
-    workdir: str | None = None
+    workdir: str | None = None  # Project parent of working/ and rawdata/
     loglevel: str = 'info'
     plotlevel: str = 'default'
     casalog: str | None = None
@@ -233,6 +234,8 @@ def resolve_profile_data(
 def resolve_path_relative_to_config(
     file_path: str | None,
     config_dir: Path,
+    *,
+    preserve_symlinks: bool = False,
 ) -> str | None:
     """Resolve a relative path against the configuration file's parent directory if not existing in CWD."""
     if not file_path:
@@ -240,9 +243,9 @@ def resolve_path_relative_to_config(
     if os.path.isabs(file_path) or os.path.exists(file_path):
         return os.path.abspath(file_path)
     # Check relative to config directory
-    candidate = (config_dir / file_path).resolve()
+    candidate = config_dir / file_path
     if candidate.exists():
-        return str(candidate)
+        return os.path.abspath(candidate) if preserve_symlinks else str(candidate.resolve())
     return file_path
 
 
@@ -314,9 +317,22 @@ def load_profile(
         infiles_raw = [infiles_raw]
     infiles_resolved = [resolve_path_relative_to_config(f, config_dir) or f for f in infiles_raw]
 
-    # Working directory
+    # Explicit PPR data roots are relative to the config file, not a symlinked cwd.
+    rawdata = merged.get('rawdata')
+    if rawdata is not None:
+        if not isinstance(rawdata, str) or not rawdata.strip():
+            raise ValueError('rawdata must be a nonempty path string')
+        rawdata = os.path.expanduser(os.path.expandvars(rawdata))
+        if '$' in rawdata:
+            raise ValueError('rawdata contains an unset environment variable')
+        rawdata = os.path.abspath(os.path.join(config_dir, rawdata))
+
+    # Project directory containing working/ and rawdata/.
     workdir_raw = merged.get('workdir')
-    workdir_resolved = resolve_path_relative_to_config(workdir_raw, config_dir) if workdir_raw else None
+    workdir_resolved = (
+        resolve_path_relative_to_config(workdir_raw, config_dir, preserve_symlinks=True)
+        if workdir_raw else None
+    )
 
     # CASA log
     casalog_raw = merged.get('casalog')
@@ -327,6 +343,7 @@ def load_profile(
         mode=mode,
         telescope=telescope,
         ppr=ppr_resolved,
+        rawdata=rawdata,
         importonly=bool(merged.get('importonly', False)),
         bp_name=str(merged.get('bp_name', 'breakpoint')),
         bpaction=str(merged.get('bpaction', 'ignore')),

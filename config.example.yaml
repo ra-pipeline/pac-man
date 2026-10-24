@@ -16,7 +16,7 @@ profiles:
   default:
     description: "Baseline runtime settings"
     backend: subprocess           # Parsl backend: 'subprocess', 'htcondor', 'slurm', 'threads'
-    workdir: working/             # Working directory for pipeline execution
+    workdir: .                    # Project parent of working/ and rawdata/
     loglevel: info                # Logging verbosity: 'debug', 'info', 'warning', 'error'
     parsl_loglevel: info          # Independent Parsl console verbosity
     parsl_monitoring: false       # Optional SQLite diagnostics for the Parsl visualizer
@@ -45,6 +45,7 @@ profiles:
     mode: ppr
     telescope: alma
     ppr: rawdata/PPR.xml          # Path to PPR XML file
+    # rawdata: rawdata         # Override automatic sibling rawdata lookup; relative to this config
     importonly: false             # Stop processing after data import stage
     bp_name: breakpoint           # Name of task treated as breakpoint
     bpaction: ignore              # Breakpoint action: 'ignore', 'break', 'resume'

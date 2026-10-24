@@ -87,13 +87,22 @@ def render_progress() -> None:
         timeline['Start'] = normalize_to_local(timeline['task_try_time_launched'])
         timeline['Finish'] = normalize_to_local(timeline['task_try_time_returned']).fillna(pd.Timestamp.now())
         timeline['duration_s'] = (timeline['Finish'] - timeline['Start']).dt.total_seconds().round(1)
+        executor_order = list(TASK_COLOR_MAP)
+        row_order = (
+            timeline.assign(_executor_order=timeline['task_executor'].map(
+                {executor: index for index, executor in enumerate(executor_order)}
+            ).fillna(len(executor_order)))
+            .sort_values(['_executor_order', 'Start', 'task_func_name'], kind='stable')
+            ['task_func_name'].drop_duplicates().tolist()
+        )
         fig = px.timeline(
             timeline, x_start='Start', x_end='Finish', y='task_func_name', color='task_executor',
             color_discrete_map=TASK_COLOR_MAP,
+            category_orders={'task_executor': executor_order},
             hover_data=['task_id', 'task_status', 'duration_s', 'hostname', 'try_id'],
         )
         fig.update_layout(height=max(500, timeline['task_func_name'].nunique() * 26))
-        fig.update_yaxes(autorange='reversed', dtick=1)
+        fig.update_yaxes(autorange='reversed', dtick=1, categoryorder='array', categoryarray=row_order)
         st.plotly_chart(fig, width='stretch')
     else:
         st.info('No launched tasks found for this run.')

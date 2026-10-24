@@ -46,6 +46,57 @@ context = pac_man_reduce(
 )
 ```
 
+### Project Directories and Symlinks
+
+`workdir` names the project parent containing `working/` and `rawdata/`, for
+both PPR and recipe profiles. The `--workdir` CLI option has the same meaning.
+PAC-MAN creates and enters `<workdir>/working` for execution; logs, state and
+`runinfo/` remain inside that directory. Without an explicit root, the CLI uses
+the invocation directory as the project parent.
+
+```toml
+[profiles.demo_ppr]
+mode = "ppr"
+telescope = "alma"
+ppr = "/shared/project/working/PPR.xml"
+workdir = "/shared/project"
+# rawdata = "/other/input-root" # Optional override of automatic discovery
+```
+
+The layout is:
+
+```text
+project/                  # workdir
+  working/                # execution directory; may be a symlink
+  rawdata/                # PPR inputs; may be a symlink
+```
+
+For compatibility, a `workdir` or `--workdir` path ending in `working` is treated
+as an execution-directory path, with its parent as the project root. It does
+not create `working/working`. Classification happens before resolving symlinks,
+so a convenience `project/working` symlink still finds `project/rawdata`.
+
+ALMA and VLA PPR profiles use an existing `<workdir>/rawdata` by default.
+An explicit `rawdata` profile setting takes precedence and disables the working-directory
+dataset fallback. Relative `rawdata` profile values are anchored to the config
+file; environment variables and `~` are expanded. Python callers can pass
+`rawdata_dir="/shared/project/rawdata"` to either PPR runner; relative API values
+use the current directory. Direct Python runners continue to execute in their
+current directory. Internal `working_dir` parameters still identify the actual
+execution directory, rather than the project root.
+
+Without an explicit input root, PPR runners honor a nonempty `SCIPIPE_ROOTDIR`
+and the PPR `<RelativePath>` for production directory routing. An empty or unset
+variable uses the local directory fallback. A supplied `rawdata_dir`, including
+one selected from a profile's project root, takes precedence over that variable.
+
+The `pipeline-test` entry point anchors existing relative `--vis` and
+`--procedure` inputs to the invocation directory before entering `working/`.
+Unresolved CASA dataset and recipe aliases remain available to CASA's resolver.
+
+The PPR parser's `Relative path:` message reports the XML's `<RelativePath>`.
+`PPR input raw-data directory:` identifies the directory selected by PAC-MAN.
+
 ### Logging
 
 Python console timestamps omit fractional seconds and retain padding so that
@@ -301,7 +352,7 @@ the final snapshot; local scratch lifetime follows site cleanup policy.
 
 ### CLI Pipeline Runner
 
-PAC-MAN provides the `pipeline-test` task mapped to `scripts/test_pipeline.py`. To prevent polluting the repository root with runtime logs (`casapy.log`), plots, and checkpoints, pipeline runs are automatically isolated in `working/` when invoked from the repository root.
+PAC-MAN provides the `pipeline-test` task mapped to `scripts/test_pipeline.py`. It uses the same project-root convention: logs, plots and checkpoints are placed in the selected root’s `working/` child.
 
 #### 1. Inside the Repository
 
@@ -325,7 +376,7 @@ All CASA logs, checkpoints, and intermediate products are generated locally in `
 
 #### 2. Custom Directory or Outside the Repository
 
-To specify an explicit working directory, pass `--workdir` (or `-w`):
+To specify a project parent, pass `--workdir` (or `-w`); execution uses its `working/` child:
 
 ```bash
 pixi run pipeline-test --telescope vla --workdir /path/to/scratch
@@ -344,7 +395,7 @@ Supported CLI options:
 
 - `-t, --telescope`: Target workflow (`vla`, `alma`, or multi-EB import test `alma-3eb` / alias `3eb`). Default: `vla`. Can also be passed positionally.
 - `-b, --backend`: Parsl execution backend (`subprocess`, `htcondor`, `slurm`, `threads`). Default: `subprocess`.
-- `-w, --workdir`: Target working directory for execution. Defaults to `working/` if invoked from the repository root.
+- `-w, --workdir`: Project parent containing `working/` and `rawdata/`. Defaults to the invocation directory; execution uses its `working/` child.
 - `--vis`: One or more custom MeasurementSet or ASDM paths to reduce (supports multiple inputs for parallel import testing).
 - `-p, --procedure`: Pipeline recipe XML filename or path.
 - `--exitstage`: Stage number at which to stop execution.
