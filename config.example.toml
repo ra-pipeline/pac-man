@@ -17,15 +17,22 @@ default_profile = "default"
 [profiles.default]
 description = "Baseline runtime settings"
 backend = "subprocess"            # Parsl backend: 'subprocess', 'htcondor', 'slurm', 'threads'
-workdir = "working/"              # Working directory for pipeline execution
+workdir = "."                    # Project parent of working/ and rawdata/
 loglevel = "info"                 # Logging verbosity: 'debug', 'info', 'warning', 'error'
 parsl_loglevel = "info"           # Independent Parsl console verbosity
+parsl_monitoring = false          # Enable SQLite diagnostics for the Parsl visualizer
+# With parsl_monitoring enabled: node-local SQLite diagnostics, archived at shutdown.
+# monitoring_local_dir = "${SLURM_TMPDIR}"
 plotlevel = "default"             # Plot level: 'default', 'summary', 'all'
 log2term = true                   # Print CASA log output to terminal
 max_tier0_workers = 0             # Maximum concurrent workers for pipeline stages (0 for automatic)
 max_weblog_workers = 2            # Maximum concurrent workers for background weblog rendering
+slurm_walltime = "168:00:00"       # Lifetime per compute/weblog worker allocation
+slurm_max_idletime = 120          # Seconds before releasing idle Slurm workers
 omp_num_threads = "1"             # OMP/BLAS thread limit per worker process
 # slurm_partition = "compute"      # Omit to inherit $SLURM_JOB_PARTITION, then use the site default
+# slurm_mail_user = "alice@example.org"  # Worker-job notification recipient
+# slurm_mail_type = "BEGIN,END,FAIL"     # Optional events for both compute and weblog jobs
 # slurm_account = "project-name"   # Optional Slurm account
 # slurm_qos = "normal"             # Optional Slurm quality of service
 # slurm_constraint = "cpu"         # Optional Slurm node constraint
@@ -34,6 +41,8 @@ omp_num_threads = "1"             # OMP/BLAS thread limit per worker process
 # condor_project = "demo"          # Optional ProjectName; inherits from an enclosing Condor job
 # condor_requirements = "TARGET.HasFeature == true" # Optional ClassAd matching expression
 # condor_accounting_group = "group.demo" # Optional; inherits from an enclosing Condor job
+# condor_schedd = "schedd.example.org"  # Optional remote schedd Name; requires remote authorization
+# condor_pool = "collector.example.org" # Optional collector host[:port]; requires condor_schedd
 
 # ------------------------------------------------------------------------------
 # 2. ALMA Pipeline Processing Request (PPR)
@@ -44,6 +53,7 @@ description = "ALMA standard pipeline execution via PPR XML"
 mode = "ppr"
 telescope = "alma"
 ppr = "rawdata/PPR.xml"           # Path to PPR XML file
+# rawdata = "rawdata"          # Override automatic sibling rawdata lookup; relative to this config
 importonly = false                # Stop processing after data import stage
 bp_name = "breakpoint"            # Name of task treated as breakpoint
 bpaction = "ignore"               # Breakpoint action: 'ignore', 'break', 'resume'

@@ -13,7 +13,6 @@ import datetime
 import logging
 import os
 import platform
-import sqlite3
 
 import parsl
 from parsl.app.app import python_app
@@ -30,72 +29,38 @@ except ImportError:
 
 # Import pac-man config to initialize parsl
 from pac_man.config import initialize_parsl
+from pac_man.events import record_stage
+from pac_man.monitoring import snapshot_monitoring
 
 # Pipeline imports moved into pac_man_reduce to avoid early CASA initialization in remote workers
 LOG = logging.getLogger(__name__)
 
 
-def _log_stage_execution(
-    db_path: str,
-    run_id: str,
-    stage_number: int,
-    task_name: str,
-    stage_label: str,
-    start_time: datetime.datetime,
-    end_time: datetime.datetime | None,
-    status: str,
-) -> None:
-    """Records synchronous main-process pipeline compute stage events into monitoring database."""
-    try:
-        abs_db_path = os.path.abspath(db_path)
-        os.makedirs(os.path.dirname(abs_db_path), exist_ok=True)
-        conn = sqlite3.connect(abs_db_path, timeout=10.0)
-        with conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS stage_execution (
-                    run_id TEXT,
-                    stage_number INTEGER,
-                    task_name TEXT,
-                    stage_label TEXT,
-                    start_time TIMESTAMP,
-                    end_time TIMESTAMP,
-                    status TEXT,
-                    hostname TEXT
-                )
-            """)
-            start_time_val = start_time.isoformat() if isinstance(start_time, datetime.datetime) else start_time
-            end_time_val = end_time.isoformat() if isinstance(end_time, datetime.datetime) else end_time
+def _resolve_ppr_rawdata_dir(rawdata_dir: str | None, default: str) -> str:
+    """Resolve an explicit input directory without deriving it from physical cwd."""
+    if rawdata_dir is None:
+        return default
+    if not rawdata_dir.strip():
+        raise ValueError('rawdata_dir must not be empty')
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(rawdata_dir)))
+    if '$' in path:
+        raise ValueError('rawdata_dir contains an unset environment variable')
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f'PPR raw-data directory not found: {path}')
+    return path
 
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT rowid FROM stage_execution WHERE run_id = ? AND stage_number = ?',
-                (run_id, stage_number),
-            )
-            row = cursor.fetchone()
-            if row:
-                conn.execute(
-                    'UPDATE stage_execution SET end_time = ?, status = ? WHERE rowid = ?',
-                    (end_time_val, status, row[0]),
-                )
-            else:
-                conn.execute(
-                    """INSERT INTO stage_execution 
-                       (run_id, stage_number, task_name, stage_label, start_time, end_time, status, hostname)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        run_id,
-                        stage_number,
-                        task_name,
-                        stage_label,
-                        start_time_val,
-                        end_time_val,
-                        status,
-                        platform.node(),
-                    ),
-                )
-        conn.close()
-    except Exception as e:
-        LOG.debug('Failed to record stage telemetry: %s', e)
+
+def _ppr_directories(relative_path: str, rawdata_dir: str | None) -> tuple[str, str]:
+    """Prefer an explicit input root, then a nonempty scheduler root, then cwd."""
+    scheduler_root = os.environ.get('SCIPIPE_ROOTDIR', '').strip()
+    if scheduler_root and rawdata_dir is None:
+        root = os.path.expanduser(os.path.expandvars(scheduler_root))
+        working_dir = os.path.abspath(os.path.join(root, relative_path, 'working'))
+        raw_dir = os.path.abspath(os.path.join(root, relative_path, 'rawdata'))
+    else:
+        working_dir = os.getcwd()
+        raw_dir = os.path.abspath(os.path.join('..', 'rawdata'))
+    return working_dir, _resolve_ppr_rawdata_dir(rawdata_dir, raw_dir)
 
 
 def _configure_casalog(
@@ -336,6 +301,62 @@ def create_stage_qa_and_weblog_app(stage_name: str, fn=_execute_qa_and_weblog):
 # Backward compatibility alias
 async_qa_and_weblog = create_stage_qa_and_weblog_app('async_qa_and_weblog')
 
+# Tasks whose QA calculation or WebLog rendering explicitly reads the MeasurementSet on disk
+TASKS_READING_MS_IN_BACKGROUND: set[str] = {
+    'hifa_importdata',
+    'hifv_importdata',
+    'hif_importdata',
+    'hifa_applycal',
+    'hifv_flagdata',
+    'hifv_checkflag',
+    'hsd_imaging',
+}
+
+# Tasks that perform in-place mutations on the shared MeasurementSet (FLAG, DATA, CORRECTED_DATA, WEIGHT)
+TASKS_MUTATING_MS: set[str] = {
+    'hifv_hanning',
+    'hif_applycal',
+    'hifa_applycal',
+    'hifv_applycals',
+    'statwt',
+    'hifv_statwt',
+}
+
+# Tasks that package pipeline deliverables or require full interactive synchronization
+TASKS_REQUIRING_FULL_DRAIN: set[str] = {
+    'hifa_exportdata',
+    'hifv_exportdata',
+    'hif_exportdata',
+    'exportdata',
+    'exportvlassdata',
+    'hifv_exportvlassdata',
+    'breakpoint',
+}
+
+
+def is_ms_mutative_task(task_name: str) -> bool:
+    """Determine if a pipeline task modifies existing MeasurementSet data in-place."""
+    if task_name in TASKS_MUTATING_MS:
+        return True
+    # Any task performing flag operations mutates the MS FLAG column in-place
+    if 'flag' in task_name.lower():
+        return True
+    return False
+
+
+class InFlightStageTask:
+    """Tracks in-flight background worker futures with stage metadata."""
+
+    def __init__(self, future, task_name: str, stage_nr: int):
+        self.future = future
+        self.task_name = task_name
+        self.stage_nr = stage_nr
+        self.reads_ms = task_name in TASKS_READING_MS_IN_BACKGROUND
+
+    @property
+    def is_done(self) -> bool:
+        return self.future.done()
+
 
 def _run_task_sequence(
     task_sequence,
@@ -366,8 +387,16 @@ def _run_task_sequence(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Core stage execution engine running synchronous task compute with detached QA and weblog."""
     main_casalog_file, main_log2term = _configure_casalog(casalog_file=casalog, log2term=log2term)
@@ -391,19 +420,25 @@ def _run_task_sequence(
             condor_accounting_group=condor_accounting_group,
             slurm_tier0_memory_gb=slurm_tier0_memory_gb,
             slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+            slurm_walltime=slurm_walltime,
+            slurm_max_idletime=slurm_max_idletime,
             parsl_loglevel=parsl_loglevel,
             profile_name=profile_name,
+            monitoring_local_dir=monitoring_local_dir,
+            parsl_monitoring=parsl_monitoring,
+            slurm_mail_user=slurm_mail_user,
+            slurm_mail_type=slurm_mail_type,
+            condor_schedd=condor_schedd,
+            condor_pool=condor_pool,
         )
     except Exception as e:
+        try:
+            parsl.dfk()
+        except parsl.errors.NoDataFlowKernelError:
+            raise e
         LOG.debug('Parsl already initialized or notice: %s', e)
 
     dfk = parsl.dfk()
-    run_id = dfk.run_id
-    monitoring_endpoint = (
-        getattr(dfk.config.monitoring, 'logging_endpoint', 'sqlite:///runinfo/monitoring.db')
-        or 'sqlite:///runinfo/monitoring.db'
-    )
-    monitoring_db_path = monitoring_endpoint.replace('sqlite:///', '')
 
     basetask.DISABLE_QA = True
     basetask.DISABLE_WEBLOG = False
@@ -435,6 +470,7 @@ def _run_task_sequence(
 
     last_background_future = None
     background_futures = []
+    in_flight_tasks: list[InFlightStageTask] = []
 
     try:
         procedure_stage_nr = 0
@@ -445,19 +481,46 @@ def _run_task_sequence(
             if procedure_stage_nr < startstage:
                 continue
 
-            if task_name in ['hifa_exportdata', 'hifv_exportdata', 'hif_exportdata'] and background_futures:
-                LOG.info('PAC-MAN: Waiting for all background Weblog renders to finish before %s...', task_name)
-                for f in background_futures:
-                    f.result()
-                LOG.info('PAC-MAN: Background Weblogs finished. Proceeding with %s.', task_name)
+            # Stage Synchronization Barrier
+            # 1. Full drain if upcoming stage packages deliverables or hits a breakpoint
+            if task_name in TASKS_REQUIRING_FULL_DRAIN:
+                active_tasks = [t for t in in_flight_tasks if not t.is_done]
+                if active_tasks:
+                    LOG.info(
+                        'PAC-MAN: Stage %03d (%s) requires packaging synchronization. Awaiting %d background workers...',
+                        procedure_stage_nr,
+                        task_name,
+                        len(active_tasks),
+                    )
+                    for t in active_tasks:
+                        t.future.result()
+                    in_flight_tasks.clear()
+                    last_background_future = None
+
+            # 2. Targeted resource barrier if upcoming stage mutates MS in-place
+            elif is_ms_mutative_task(task_name):
+                conflicting = [t for t in in_flight_tasks if not t.is_done and t.reads_ms]
+                if conflicting:
+                    conflicts_str = ', '.join(f'Stage {t.stage_nr} ({t.task_name})' for t in conflicting)
+                    LOG.info(
+                        'PAC-MAN: Mutative Stage %03d (%s) detected resource contention with in-flight MS-reading workers [%s]. Awaiting completion...',
+                        procedure_stage_nr,
+                        task_name,
+                        conflicts_str,
+                    )
+                    for t in conflicting:
+                        t.future.result()
+                    # Retain non-conflicting pure HTML / caltable background workers in flight
+                    in_flight_tasks = [t for t in in_flight_tasks if not t.is_done and not t.reads_ms]
+                    last_background_future = in_flight_tasks[-1].future if in_flight_tasks else None
 
             LOG.info('\n%s\nPAC-MAN Executing Stage %d: %s\n%s', '=' * 60, procedure_stage_nr, task_name, '=' * 60)
 
             stage_metadata = f'Stage_{procedure_stage_nr:03d}_{task_name}'
             stage_start_time = datetime.datetime.now()
-            _log_stage_execution(
-                db_path=monitoring_db_path,
-                run_id=run_id,
+            record_stage(
+                dfk=dfk,
+                hostname=platform.node(),
                 stage_number=procedure_stage_nr,
                 task_name=task_name,
                 stage_label=f'{stage_metadata} [compute]',
@@ -506,9 +569,9 @@ def _run_task_sequence(
                             exc_info=True,
                         )
 
-                _log_stage_execution(
-                    db_path=monitoring_db_path,
-                    run_id=run_id,
+                record_stage(
+                    dfk=dfk,
+                    hostname=platform.node(),
                     stage_number=procedure_stage_nr,
                     task_name=task_name,
                     stage_label=f'{stage_metadata} [compute]',
@@ -523,9 +586,9 @@ def _run_task_sequence(
                     raise exceptions.PipelineException(previous_tracebacks_as_string)
 
             except Exception:
-                _log_stage_execution(
-                    db_path=monitoring_db_path,
-                    run_id=run_id,
+                record_stage(
+                    dfk=dfk,
+                    hostname=platform.node(),
                     stage_number=procedure_stage_nr,
                     task_name=task_name,
                     stage_label=f'{stage_metadata} [compute]',
@@ -576,6 +639,8 @@ def _run_task_sequence(
             )
 
             background_futures.append(bg_future)
+            in_flight_tasks = [t for t in in_flight_tasks if not t.is_done]
+            in_flight_tasks.append(InFlightStageTask(bg_future, task_name, result.stage_number))
             last_background_future = bg_future
 
             if importonly and task_name in import_tasks:
@@ -587,41 +652,44 @@ def _run_task_sequence(
                 break
 
     finally:
-        LOG.info('Saving final context...')
-        cli.h_save()
-
-        LOG.info('PAC-MAN: Waiting for any remaining background rendering tasks to finish...')
-        for future in background_futures:
-            future.result()
-        LOG.info('PAC-MAN: All background tasks complete. Workflow finished!')
-
-        if atrium_ctx is not None and atrium_storage_dir:
-            try:
-                from atrium.adapters.pipeline import export_timetracker_json
-
-                atrium_ctx = RunContext.load(run_id=context.name, storage_dir=atrium_storage_dir)
-                final_chk = atrium_ctx.checkpoint()
-                LOG.info(
-                    'Atrium: Final context state version %d (%d datasets, %d cal entries, checkpoint: %s)',
-                    atrium_ctx.version,
-                    len(atrium_ctx.snapshot.datasets),
-                    len(atrium_ctx.snapshot.cal_library),
-                    final_chk.name,
-                )
-                summary_df = atrium_ctx.metrics.task_summary()
-                if not summary_df.is_empty():
-                    LOG.info('Atrium Task Execution Summary:\n%s', summary_df)
-
-                tt_path = os.path.join(context.output_dir, f'{context.name}.timetracker.json')
-                export_timetracker_json(atrium_ctx, tt_path)
-                LOG.info('Atrium: Exported compatibility timetracker JSON to %s', tt_path)
-            except Exception as metrics_err:
-                LOG.debug('Atrium metrics summary skipped: %s', metrics_err)
-
         try:
-            parsl.dfk().cleanup()
-        except Exception as parsl_err:
-            LOG.debug('Parsl cleanup exception: %s', parsl_err)
+            LOG.info('Saving final context...')
+            cli.h_save()
+
+            LOG.info('PAC-MAN: Waiting for any remaining background rendering tasks to finish...')
+            for future in background_futures:
+                future.result()
+            LOG.info('PAC-MAN: All background tasks complete. Workflow finished!')
+
+            if atrium_ctx is not None and atrium_storage_dir:
+                try:
+                    from atrium.adapters.pipeline import export_timetracker_json
+
+                    atrium_ctx = RunContext.load(run_id=context.name, storage_dir=atrium_storage_dir)
+                    final_chk = atrium_ctx.checkpoint()
+                    LOG.info(
+                        'Atrium: Final context state version %d (%d datasets, %d cal entries, checkpoint: %s)',
+                        atrium_ctx.version,
+                        len(atrium_ctx.snapshot.datasets),
+                        len(atrium_ctx.snapshot.cal_library),
+                        final_chk.name,
+                    )
+                    summary_df = atrium_ctx.metrics.task_summary()
+                    if not summary_df.is_empty():
+                        LOG.info('Atrium Task Execution Summary:\n%s', summary_df)
+
+                    tt_path = os.path.join(context.output_dir, f'{context.name}.timetracker.json')
+                    export_timetracker_json(atrium_ctx, tt_path)
+                    LOG.info('Atrium: Exported compatibility timetracker JSON to %s', tt_path)
+                except Exception as metrics_err:
+                    LOG.debug('Atrium metrics summary skipped: %s', metrics_err)
+
+        finally:
+            try:
+                dfk.cleanup()
+                snapshot_monitoring(dfk.config.monitoring)
+            except Exception as parsl_err:
+                LOG.warning('Parsl cleanup or monitoring snapshot failed: %s', parsl_err)
 
     return context
 
@@ -652,8 +720,16 @@ def pac_man_reduce(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Executes a CASA Pipeline data reduction procedure using the PAC-MAN orchestrator.
 
@@ -680,8 +756,16 @@ def pac_man_reduce(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
+        monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
         casalog: Optional custom CASA log file path to aggregate all logging into a single file.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
     """
@@ -721,8 +805,16 @@ def pac_man_reduce(
         condor_accounting_group=condor_accounting_group,
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+        slurm_walltime=slurm_walltime,
+        slurm_max_idletime=slurm_max_idletime,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
+        monitoring_local_dir=monitoring_local_dir,
+        parsl_monitoring=parsl_monitoring,
+        slurm_mail_user=slurm_mail_user,
+        slurm_mail_type=slurm_mail_type,
+        condor_schedd=condor_schedd,
+        condor_pool=condor_pool,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -746,6 +838,7 @@ def pac_man_executeppr(
     startstage: int | None = None,
     exitstage: int | None = None,
     *,
+    rawdata_dir: str | None = None,
     slurm_partition: str | None = None,
     slurm_account: str | None = None,
     slurm_qos: str | None = None,
@@ -755,8 +848,16 @@ def pac_man_executeppr(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Executes a Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -764,6 +865,7 @@ def pac_man_executeppr(
 
     Args:
         pprXmlFile: Path to PPR XML file.
+        rawdata_dir: Explicit PPR input directory; defaults to the existing directory layout.
         importonly: Whether to stop processing after importing data (default: False).
         bp_name: Name of command considered as a break point.
         bpaction: Action at breakpoint ('ignore', 'break', 'resume').
@@ -781,8 +883,16 @@ def pac_man_executeppr(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
+        monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -802,12 +912,8 @@ def pac_man_executeppr(
     )
     processing_intents = pipe_eppr._getProcessingIntents(intentsDict, procedureName)
 
-    if 'SCIPIPE_ROOTDIR' in os.environ:
-        working_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'working')
-        raw_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'rawdata')
-    else:
-        working_dir = os.path.abspath(os.path.join('..', 'working'))
-        raw_dir = os.path.abspath(os.path.join('..', 'rawdata'))
+    working_dir, raw_dir = _ppr_directories(relativePath, rawdata_dir)
+    LOG.info('PPR input raw-data directory: %s', raw_dir)
 
     bpset = False
     if bp_name != '':
@@ -865,7 +971,7 @@ def pac_man_executeppr(
                 break
         sessions.append(session)
         asdm_path = os.path.join(raw_dir, asdm_name)
-        if not os.path.exists(asdm_path) and os.path.exists(asdm_name):
+        if rawdata_dir is None and not os.path.exists(asdm_path) and os.path.exists(asdm_name):
             asdm_path = os.path.abspath(asdm_name)
         files.append(asdm_path)
 
@@ -915,8 +1021,16 @@ def pac_man_executeppr(
         condor_accounting_group=condor_accounting_group,
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+        slurm_walltime=slurm_walltime,
+        slurm_max_idletime=slurm_max_idletime,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
+        monitoring_local_dir=monitoring_local_dir,
+        parsl_monitoring=parsl_monitoring,
+        slurm_mail_user=slurm_mail_user,
+        slurm_mail_type=slurm_mail_type,
+        condor_schedd=condor_schedd,
+        condor_pool=condor_pool,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,
@@ -940,6 +1054,7 @@ def pac_man_executevlappr(
     startstage: int | None = None,
     exitstage: int | None = None,
     *,
+    rawdata_dir: str | None = None,
     slurm_partition: str | None = None,
     slurm_account: str | None = None,
     slurm_qos: str | None = None,
@@ -949,8 +1064,16 @@ def pac_man_executevlappr(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ):
     """Executes a VLA Pipeline Processing Request (PPR) using the PAC-MAN orchestrator.
 
@@ -958,6 +1081,7 @@ def pac_man_executevlappr(
 
     Args:
         pprXmlFile: Path to PPR XML file.
+        rawdata_dir: Explicit PPR input directory; defaults to the existing directory layout.
         importonly: Whether to stop processing after importing data (default: False).
         loglevel: Logging verbosity ('debug', 'info', 'warning', 'error').
         plotlevel: Plot generation level ('summary', 'default', 'all').
@@ -973,8 +1097,16 @@ def pac_man_executevlappr(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for scheduler display names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
+        monitoring_local_dir: Local scratch root for live monitoring; archived on shutdown.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
         casalog: Optional custom CASA log file path.
         log2term: Optional boolean to enable/disable printing CASA log output to terminal.
         startstage: Optional stage number at which to start execution.
@@ -994,12 +1126,8 @@ def pac_man_executevlappr(
     )
     processing_intents = pipe_vlappr._getProcessingIntents(intentsDict, procedureName)
 
-    if 'SCIPIPE_ROOTDIR' in os.environ:
-        working_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'working')
-        raw_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'rawdata')
-    else:
-        working_dir = os.path.abspath(os.path.join('..', 'working'))
-        raw_dir = os.path.abspath(os.path.join('..', 'rawdata'))
+    working_dir, raw_dir = _ppr_directories(relativePath, rawdata_dir)
+    LOG.info('PPR input raw-data directory: %s', raw_dir)
 
     context = cli.h_init(loglevel=loglevel, plotlevel=plotlevel, processing_intents=processing_intents)
 
@@ -1027,7 +1155,7 @@ def pac_man_executevlappr(
         session = defsession
         sessions.append(session)
         asdm_path = os.path.join(raw_dir, asdm_name)
-        if not os.path.exists(asdm_path) and os.path.exists(asdm_name):
+        if rawdata_dir is None and not os.path.exists(asdm_path) and os.path.exists(asdm_name):
             asdm_path = os.path.abspath(asdm_name)
         files.append(asdm_path)
 
@@ -1070,8 +1198,16 @@ def pac_man_executevlappr(
         condor_accounting_group=condor_accounting_group,
         slurm_tier0_memory_gb=slurm_tier0_memory_gb,
         slurm_weblog_memory_gb=slurm_weblog_memory_gb,
+        slurm_walltime=slurm_walltime,
+        slurm_max_idletime=slurm_max_idletime,
         parsl_loglevel=parsl_loglevel,
         profile_name=profile_name,
+        monitoring_local_dir=monitoring_local_dir,
+        parsl_monitoring=parsl_monitoring,
+        slurm_mail_user=slurm_mail_user,
+        slurm_mail_type=slurm_mail_type,
+        condor_schedd=condor_schedd,
+        condor_pool=condor_pool,
         casalog=casalog,
         log2term=log2term,
         startstage=startstage,

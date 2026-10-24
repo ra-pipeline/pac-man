@@ -16,9 +16,11 @@ profiles:
   default:
     description: "Baseline runtime settings"
     backend: subprocess           # Parsl backend: 'subprocess', 'htcondor', 'slurm', 'threads'
-    workdir: working/             # Working directory for pipeline execution
+    workdir: .                    # Project parent of working/ and rawdata/
     loglevel: info                # Logging verbosity: 'debug', 'info', 'warning', 'error'
     parsl_loglevel: info          # Independent Parsl console verbosity
+    parsl_monitoring: false       # Optional SQLite diagnostics for the Parsl visualizer
+    # monitoring_local_dir: "${SLURM_TMPDIR}" # Optional node-local SQLite; archived at shutdown
     plotlevel: default            # Plot level: 'default', 'summary', 'all'
     log2term: true                # Print CASA log output to terminal
     max_tier0_workers: null       # Maximum concurrent workers for pipeline stages (null for automatic)
@@ -30,6 +32,8 @@ profiles:
     slurm_constraint: null        # Optional Slurm node constraint
     slurm_tier0_memory_gb: 32      # Memory per Slurm compute worker
     slurm_weblog_memory_gb: 8      # Memory per Slurm weblog worker
+    slurm_walltime: "168:00:00"     # Lifetime per worker allocation
+    slurm_max_idletime: 120       # Seconds before releasing idle Slurm workers
     condor_project: null          # Inherit ProjectName from an enclosing Condor job
     condor_requirements: null     # Optional ClassAd matching expression
     condor_accounting_group: null # Inherit from an enclosing Condor job
@@ -41,6 +45,7 @@ profiles:
     mode: ppr
     telescope: alma
     ppr: rawdata/PPR.xml          # Path to PPR XML file
+    # rawdata: rawdata         # Override automatic sibling rawdata lookup; relative to this config
     importonly: false             # Stop processing after data import stage
     bp_name: breakpoint           # Name of task treated as breakpoint
     bpaction: ignore              # Breakpoint action: 'ignore', 'break', 'resume'

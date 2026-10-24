@@ -18,7 +18,7 @@ Usage:
     # Run from an external directory:
     pixi run --manifest-path "$PACMAN_ROOT" pipeline-test --telescope vla
 
-    # With a custom working directory:
+    # With a custom project directory:
     pixi run pipeline-test --telescope alma-3eb --workdir /path/to/workdir
 """
 
@@ -266,7 +266,7 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         "-w",
         "--workdir",
         default=None,
-        help="Target working directory for execution (defaults to working/ if invoked from repo root).",
+        help="Project directory containing working/ and rawdata/ (defaults to the invocation directory).",
     )
     parser.add_argument(
         "-l",
@@ -309,19 +309,24 @@ def main(args: Sequence[str] | None = None):
     if parsed.log2term is None and "CASA_LOG2TERM" in os.environ:
         parsed.log2term = os.environ["CASA_LOG2TERM"].lower() in ("1", "true", "yes")
 
-    # Determine execution working directory:
-    # 1. Explicit --workdir CLI argument takes highest priority.
-    # 2. If invoked via Pixi from the repository root, route to working/ to prevent polluting the repo.
-    # 3. Otherwise, preserve the caller's initial invocation directory (INIT_CWD).
-    pixi_root = os.environ.get("PIXI_PROJECT_ROOT")
-    init_cwd = os.environ.get("INIT_CWD") or os.getcwd()
+    from pac_man.paths import project_directories
 
-    if parsed.workdir:
-        target_dir = os.path.abspath(parsed.workdir)
-    elif pixi_root and (os.path.abspath(init_cwd) == os.path.abspath(pixi_root)):
-        target_dir = os.path.join(pixi_root, "working")
-    else:
-        target_dir = os.path.abspath(init_cwd)
+    invocation_dir = os.environ.get("INIT_CWD") or os.getcwd()
+
+    def caller_input(path: str | None) -> str | None:
+        if path is None:
+            return None
+        candidate = os.path.join(invocation_dir, os.path.expanduser(path))
+        return os.path.abspath(candidate) if os.path.exists(candidate) else path
+
+    # Pin existing caller-relative inputs before entering the execution directory.
+    # Keep unresolved CASA dataset and recipe aliases available to their resolver.
+    if parsed.vis:
+        parsed.vis = [caller_input(path) for path in parsed.vis]
+    parsed.procedure = caller_input(parsed.procedure)
+    selected = parsed.workdir or invocation_dir
+    _, working_dir, _ = project_directories(selected)
+    target_dir = str(working_dir.resolve())
 
     os.makedirs(target_dir, exist_ok=True)
     os.chdir(target_dir)

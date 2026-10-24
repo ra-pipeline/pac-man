@@ -34,6 +34,7 @@ class ResolvedProfile:
     telescope: str = 'alma'  # 'alma' or 'vla'
     # PPR settings
     ppr: str | None = None
+    rawdata: str | None = None
     importonly: bool = False
     bp_name: str = 'breakpoint'
     bpaction: str = 'ignore'
@@ -44,7 +45,7 @@ class ResolvedProfile:
     infiles: list[str] = field(default_factory=list)
     # Execution & Runtime settings
     backend: str = 'subprocess'
-    workdir: str | None = None
+    workdir: str | None = None  # Project parent of working/ and rawdata/
     loglevel: str = 'info'
     plotlevel: str = 'default'
     casalog: str | None = None
@@ -64,7 +65,15 @@ class ResolvedProfile:
     raw_config: dict[str, Any] = field(default_factory=dict)
     slurm_tier0_memory_gb: int = 32
     slurm_weblog_memory_gb: int = 8
+    slurm_walltime: str = '168:00:00'
+    slurm_max_idletime: float = 120
     parsl_loglevel: str = 'info'
+    monitoring_local_dir: str | None = None
+    parsl_monitoring: bool = False
+    slurm_mail_user: str | None = None
+    slurm_mail_type: str | None = None
+    condor_schedd: str | None = None
+    condor_pool: str | None = None
 
 
 USER_CONFIG_CANDIDATES: list[Path] = [
@@ -225,6 +234,8 @@ def resolve_profile_data(
 def resolve_path_relative_to_config(
     file_path: str | None,
     config_dir: Path,
+    *,
+    preserve_symlinks: bool = False,
 ) -> str | None:
     """Resolve a relative path against the configuration file's parent directory if not existing in CWD."""
     if not file_path:
@@ -232,9 +243,9 @@ def resolve_path_relative_to_config(
     if os.path.isabs(file_path) or os.path.exists(file_path):
         return os.path.abspath(file_path)
     # Check relative to config directory
-    candidate = (config_dir / file_path).resolve()
+    candidate = config_dir / file_path
     if candidate.exists():
-        return str(candidate)
+        return os.path.abspath(candidate) if preserve_symlinks else str(candidate.resolve())
     return file_path
 
 
@@ -265,6 +276,9 @@ def load_profile(
 
     target_profile = profile_name or raw_cfg.get('default_profile') or 'default'
     merged = resolve_profile_data(profiles, target_profile)
+    parsl_monitoring = merged.get('parsl_monitoring', False)
+    if not isinstance(parsl_monitoring, bool):
+        raise ValueError('parsl_monitoring must be a boolean (true or false)')
 
     # Determine execution mode: 'ppr' or 'recipe'
     mode = merged.get('mode')
@@ -303,9 +317,22 @@ def load_profile(
         infiles_raw = [infiles_raw]
     infiles_resolved = [resolve_path_relative_to_config(f, config_dir) or f for f in infiles_raw]
 
-    # Working directory
+    # Explicit PPR data roots are relative to the config file, not a symlinked cwd.
+    rawdata = merged.get('rawdata')
+    if rawdata is not None:
+        if not isinstance(rawdata, str) or not rawdata.strip():
+            raise ValueError('rawdata must be a nonempty path string')
+        rawdata = os.path.expanduser(os.path.expandvars(rawdata))
+        if '$' in rawdata:
+            raise ValueError('rawdata contains an unset environment variable')
+        rawdata = os.path.abspath(os.path.join(config_dir, rawdata))
+
+    # Project directory containing working/ and rawdata/.
     workdir_raw = merged.get('workdir')
-    workdir_resolved = resolve_path_relative_to_config(workdir_raw, config_dir) if workdir_raw else None
+    workdir_resolved = (
+        resolve_path_relative_to_config(workdir_raw, config_dir, preserve_symlinks=True)
+        if workdir_raw else None
+    )
 
     # CASA log
     casalog_raw = merged.get('casalog')
@@ -316,6 +343,7 @@ def load_profile(
         mode=mode,
         telescope=telescope,
         ppr=ppr_resolved,
+        rawdata=rawdata,
         importonly=bool(merged.get('importonly', False)),
         bp_name=str(merged.get('bp_name', 'breakpoint')),
         bpaction=str(merged.get('bpaction', 'ignore')),
@@ -344,5 +372,13 @@ def load_profile(
         raw_config=merged,
         slurm_tier0_memory_gb=int(merged.get('slurm_tier0_memory_gb', 32)),
         slurm_weblog_memory_gb=int(merged.get('slurm_weblog_memory_gb', 8)),
+        slurm_walltime=str(merged.get('slurm_walltime', '168:00:00')),
+        slurm_max_idletime=float(merged.get('slurm_max_idletime', 120)),
         parsl_loglevel=str(merged.get('parsl_loglevel', 'info')),
+        monitoring_local_dir=merged.get('monitoring_local_dir'),
+        parsl_monitoring=parsl_monitoring,
+        slurm_mail_user=merged.get('slurm_mail_user'),
+        slurm_mail_type=merged.get('slurm_mail_type'),
+        condor_schedd=merged.get('condor_schedd'),
+        condor_pool=merged.get('condor_pool'),
     )

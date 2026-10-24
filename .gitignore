@@ -43,6 +43,7 @@ pipeline-*
 .DS_Store
 .vscode/
 .idea/
+*.code-workspace
 
 # Notes
 notes/
