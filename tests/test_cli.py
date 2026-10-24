@@ -22,12 +22,20 @@ profiles:
     backend: subprocess
     loglevel: warning
     parsl_loglevel: error
+    monitoring_local_dir: /tmp/demo-scratch
+    parsl_monitoring: true
     workdir: /tmp/test_workdir
     max_weblog_workers: 3
     slurm_partition: compute
+    slurm_mail_user: alice@example.org
+    slurm_mail_type: BEGIN,END,FAIL
     condor_project: demo
+    condor_schedd: schedd.example.org
+    condor_pool: collector.example.org
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
+    slurm_walltime: "08:30:00"
+    slurm_max_idletime: 600
 
   alma_test:
     inherits: base
@@ -100,9 +108,15 @@ def test_profile_inheritance_and_deep_merge(sample_config_yaml: Path):
     assert profile.backend == "subprocess"
     assert profile.loglevel == "warning"
     assert profile.parsl_loglevel == "error"
+    assert profile.monitoring_local_dir == "/tmp/demo-scratch"
+    assert profile.parsl_monitoring is True
     assert profile.max_weblog_workers == 3
     assert profile.slurm_partition == "compute"
+    assert profile.slurm_mail_user == "alice@example.org"
+    assert profile.slurm_mail_type == "BEGIN,END,FAIL"
     assert profile.condor_project == "demo"
+    assert profile.condor_schedd == "schedd.example.org"
+    assert profile.condor_pool == "collector.example.org"
     assert profile.slurm_tier0_memory_gb == 64
     assert profile.slurm_weblog_memory_gb == 4
     # Overridden / set in alma_test
@@ -238,6 +252,14 @@ profiles:
     condor_requirements: TARGET.HasFeature == true
     slurm_tier0_memory_gb: 64
     slurm_weblog_memory_gb: 4
+    slurm_walltime: "08:30:00"
+    slurm_max_idletime: 600
+    monitoring_local_dir: /tmp/demo-scratch
+    parsl_monitoring: true
+    slurm_mail_user: alice@example.org
+    slurm_mail_type: BEGIN,END,FAIL
+    condor_schedd: schedd.example.org
+    condor_pool: collector.example.org
 """,
         encoding="utf-8",
     )
@@ -255,8 +277,16 @@ profiles:
         assert kwargs["condor_requirements"] == "TARGET.HasFeature == true"
         assert kwargs["slurm_tier0_memory_gb"] == 64
         assert kwargs["slurm_weblog_memory_gb"] == 4
+        assert kwargs["slurm_walltime"] == "08:30:00"
+        assert kwargs["slurm_max_idletime"] == 600
         assert kwargs["parsl_loglevel"] == expected_parsl_level
         assert kwargs["profile_name"] == "default"
+        assert kwargs["monitoring_local_dir"] == "/tmp/demo-scratch"
+        assert kwargs["parsl_monitoring"] is True
+        assert kwargs["slurm_mail_user"] == "alice@example.org"
+        assert kwargs["slurm_mail_type"] == "BEGIN,END,FAIL"
+        assert kwargs["condor_schedd"] == "schedd.example.org"
+        assert kwargs["condor_pool"] == "collector.example.org"
         assert kwargs["loglevel"] == ('debug' if logging_options else 'info')
 
 
@@ -321,3 +351,137 @@ profiles:
         assert kwargs["procedure"] == "procedure_hifv.xml"
         assert kwargs["profile_name"] == "default"
         assert len(kwargs["vis"]) == 2
+
+
+@pytest.mark.parametrize('setting, expected', [('', False), ('parsl_monitoring = false', False), ('parsl_monitoring = true', True)])
+def test_parsl_diagnostics_profile_opt_in(tmp_path, setting, expected):
+    path = tmp_path / 'config.toml'
+    path.write_text('[profiles.default]\nmode = "recipe"\nprocedure = "demo.xml"\n' + setting + '\n')
+    assert config_loader.load_profile(path).parsl_monitoring is expected
+
+
+def test_parsl_diagnostics_rejects_string_boolean(tmp_path):
+    path = tmp_path / 'config.toml'
+    path.write_text('[profiles.default]\nmode = "recipe"\nparsl_monitoring = "false"\n')
+    with pytest.raises(ValueError, match='parsl_monitoring must be a boolean'):
+        config_loader.load_profile(path)
+
+
+def test_rawdata_profile_path_is_config_relative_and_preserves_symlink(tmp_path, monkeypatch):
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir()
+    (tmp_path / 'datasets').mkdir()
+    alias = tmp_path / 'rawdata'
+    alias.symlink_to(tmp_path / 'datasets', target_is_directory=True)
+    config_path = config_dir / 'config.toml'
+    config_path.write_text('[profiles.default]\nmode = "ppr"\nrawdata = "../rawdata"\n')
+    monkeypatch.chdir(tmp_path / 'datasets')
+    profile = config_loader.load_profile(config_path)
+    assert profile.rawdata == str(alias)
+
+
+@pytest.mark.parametrize('telescope, entry', [('alma', 'pac_man_executeppr'), ('vla', 'pac_man_executevlappr')])
+def test_cli_forwards_explicit_rawdata_directory(tmp_path, monkeypatch, telescope, entry):
+    monkeypatch.chdir(tmp_path)
+    ppr = tmp_path / 'PPR.xml'
+    ppr.write_text('<SciPipeRequest/>')
+    rawdata = tmp_path / 'rawdata'
+    rawdata.mkdir()
+    config_path = tmp_path / 'config.toml'
+    config_path.write_text(
+        f'[profiles.default]\nmode = "ppr"\ntelescope = "{telescope}"\nppr = "{ppr}"\nrawdata = "rawdata"\n'
+    )
+    with patch(f'pac_man.runner.{entry}') as execute:
+        assert cli.main(['--config', str(config_path)]) == 0
+        assert execute.call_args.kwargs['rawdata_dir'] == str(rawdata)
+
+
+@pytest.mark.parametrize('telescope, entry', [('alma', 'pac_man_executeppr'), ('vla', 'pac_man_executevlappr')])
+@pytest.mark.parametrize('selection', ['profile', 'override'])
+@pytest.mark.parametrize('spelling', ['project', 'legacy_working'])
+def test_ppr_discovers_rawdata_beside_logical_workdir(tmp_path, monkeypatch, telescope, entry, selection, spelling):
+    physical = tmp_path / 'project/archive/member/working'
+    physical.mkdir(parents=True)
+    logical = tmp_path / 'project/working'
+    logical.symlink_to(physical, target_is_directory=True)
+    datasets = tmp_path / 'datasets'
+    datasets.mkdir()
+    rawdata = tmp_path / 'project/rawdata'
+    rawdata.symlink_to(datasets, target_is_directory=True)
+    ppr = tmp_path / 'PPR.xml'
+    ppr.write_text('<SciPipeRequest/>')
+    config_path = tmp_path / 'config.toml'
+    selected = logical.parent if spelling == 'project' else logical
+    configured_workdir = selected if selection == 'profile' else tmp_path / 'other'
+    config_path.write_text(
+        f'[profiles.default]\nmode = "ppr"\ntelescope = "{telescope}"\nppr = "{ppr}"\nworkdir = "{configured_workdir}"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    arguments = ['--config', str(config_path)]
+    if selection == 'override':
+        arguments += ['--workdir', str(selected)]
+    with patch(f'pac_man.runner.{entry}') as execute:
+        assert cli.main(arguments) == 0
+        assert execute.call_args.kwargs['rawdata_dir'] == str(rawdata)
+        assert Path.cwd() == physical
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_ppr_logical_rawdata_precedence_and_missing_candidate_fallback(tmp_path, monkeypatch, explicit):
+    working = tmp_path / 'project/working'
+    working.mkdir(parents=True)
+    override = tmp_path / 'explicit-rawdata'
+    override.mkdir()
+    if explicit:
+        (working.parent / 'rawdata').mkdir()
+    ppr = tmp_path / 'PPR.xml'
+    ppr.write_text('<SciPipeRequest/>')
+    profile = config_loader.ResolvedProfile(
+        name='test', mode='ppr', telescope='alma', ppr=str(ppr), workdir=str(working),
+        rawdata=str(override) if explicit else None,
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch('pac_man.runner.pac_man_executeppr') as execute:
+        cli.apply_preflight_environment(profile)
+        cli.execute_profile(profile)
+    assert execute.call_args.kwargs['rawdata_dir'] == (str(override) if explicit else None)
+
+
+@pytest.mark.parametrize('value, message', [
+    ('""', 'rawdata must be a nonempty path string'),
+    ('42', 'rawdata must be a nonempty path string'),
+    ('"$PACMAN_MISSING_RAWDATA"', 'rawdata contains an unset environment variable'),
+])
+def test_rawdata_profile_validates_path(tmp_path, monkeypatch, value, message):
+    monkeypatch.delenv('PACMAN_MISSING_RAWDATA', raising=False)
+    path = tmp_path / 'config.toml'
+    path.write_text(f'[profiles.default]\nmode = "ppr"\nrawdata = {value}\n')
+    with pytest.raises(ValueError, match=message):
+        config_loader.load_profile(path)
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_config_relative_workdir_preserves_execution_symlink(tmp_path, monkeypatch, legacy):
+    config_dir = tmp_path / 'configs'
+    project = config_dir / 'project'
+    project.mkdir(parents=True)
+    execution = tmp_path / 'archive/member/execution'
+    execution.mkdir(parents=True)
+    (project / 'working').symlink_to(execution, target_is_directory=True)
+    (project / 'rawdata').mkdir()
+    (project / 'PPR.xml').write_text('<SciPipeRequest/>')
+    config_path = config_dir / 'config.toml'
+    selected = 'project/working' if legacy else 'project'
+    config_path.write_text(
+        f'[profiles.default]\nmode="ppr"\ntelescope="alma"\nppr="project/PPR.xml"\nworkdir="{selected}"\n'
+    )
+    caller = tmp_path / 'caller'
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    profile = config_loader.load_profile(config_path)
+    assert profile.workdir == str(config_dir / selected)
+    with patch('pac_man.runner.pac_man_executeppr') as execute:
+        assert cli.main(['--config', str(config_path)]) == 0
+        assert Path.cwd() == execution
+        assert execute.call_args.kwargs['rawdata_dir'] == str(project / 'rawdata')
+    assert not (execution / 'working').exists()

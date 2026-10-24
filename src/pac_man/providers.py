@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from typing import Any
 
 from parsl.providers import CondorProvider, SlurmProvider
@@ -41,7 +42,53 @@ class NamedSlurmProvider(_JobNameMixin, SlurmProvider):
 
 
 class NamedCondorProvider(_JobNameMixin, CondorProvider):
-    """Expose short HTCondor batch names without changing script or log paths."""
+    """Expose batch names and optionally manage workers through a remote schedd."""
+
+    def __init__(self, *, schedd: str | None = None, pool: str | None = None, **kwargs: Any) -> None:
+        self.schedd = self._clean_target(schedd, 'condor_schedd')
+        self.pool = self._clean_target(pool, 'condor_pool')
+        if self.pool and not self.schedd:
+            raise ValueError('condor_pool requires condor_schedd to identify the worker queue')
+        super().__init__(**kwargs)
+
+    @staticmethod
+    def _clean_target(value: str | None, setting: str) -> str | None:
+        """Accept daemon names and collector host lists without command options."""
+        if value is None:
+            return None
+        if not isinstance(value, str) or '\n' in value or '\r' in value:
+            raise ValueError(f'{setting} must be a daemon name or hostname without newlines')
+        value = value.strip()
+        if not value:
+            return None
+        if value.startswith('-') or not re.fullmatch(r'[A-Za-z0-9_.@:\[\],-]+', value):
+            raise ValueError(f'{setting} must be a daemon name or hostname, not command-line options')
+        return value
+
+    def execute_wait(self, cmd: str, timeout: int | None = None) -> tuple[int, str, str]:
+        """Route every provider command, including both cancellation commands."""
+        if not self.schedd:
+            return super().execute_wait(cmd, timeout=timeout)
+        flags = ['-name', self.schedd]
+        if self.pool:
+            flags += ['-pool', self.pool]
+        if cmd.startswith('condor_submit '):
+            # Parsl supplies the path without quoting; treat the entire suffix as one path.
+            routed = shlex.join(['condor_submit', *flags, cmd[len('condor_submit '):]])
+        else:
+            commands = []
+            for part in cmd.split(';'):
+                args = shlex.split(part)
+                if not args or args[0] not in ('condor_q', 'condor_rm'):
+                    raise ValueError('Unexpected HTCondor provider command; remote routing was not applied')
+                commands.append(shlex.join([args[0], *flags, *args[1:]]))
+            routed = '; '.join(commands)
+        result = super().execute_wait(routed, timeout=timeout)
+        if cmd.startswith('condor_q ') and result[0] != 0:
+            raise RuntimeError(
+                f'Cannot query condor_schedd {self.schedd}; check connectivity, HTCondor authentication, and queue access'
+            )
+        return result
 
     def _write_submit_script(self, template: str, script_filename: str, job_name: str, configs: dict[str, Any]) -> None:
         display_name = short_job_name(self.profile_name, self.role, job_name)

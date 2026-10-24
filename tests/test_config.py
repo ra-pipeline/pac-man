@@ -76,7 +76,8 @@ def test_slurm_partition_uses_site_default_outside_job(monkeypatch: pytest.Monke
     [
         ({}, [(10, 32), (2, 8)]),
         (
-            dict(max_tier0_workers=4, max_weblog_workers=1, tier0_memory_gb=64, weblog_memory_gb=4),
+            dict(max_tier0_workers=4, max_weblog_workers=1, tier0_memory_gb=64, weblog_memory_gb=4,
+                 walltime="08:30:00", max_idletime=600),
             [(4, 64), (1, 4)],
         ),
     ],
@@ -90,7 +91,7 @@ def test_slurm_dynamic_worker_submit_scripts(settings: dict, expected: list, tmp
     ):
         parsl_config = config.get_slurm_config(**settings)
         assert parsl_config.strategy == 'htex_auto_scale'
-        assert parsl_config.max_idletime == 120
+        assert parsl_config.max_idletime == settings.get("max_idletime", 120)
         for executor, (workers, memory) in zip(parsl_config.executors, expected):
             provider = executor.provider
             assert executor.max_workers_per_node == 1
@@ -104,6 +105,7 @@ def test_slurm_dynamic_worker_submit_scripts(settings: dict, expected: list, tmp
             Path(provider.script_dir).mkdir()
             assert provider.submit('true', tasks_per_node=1) == '123'
             script = next(Path(provider.script_dir).glob('parsl.slurm.*')).read_text()
+            assert f'#SBATCH --time={510 if settings else 10080}\n' in script
             assert '#SBATCH --ntasks-per-node=1\n' in script
             assert '#SBATCH --cpus-per-task=1\n' in script
             assert f'#SBATCH --mem={memory}g\n' in script
@@ -120,13 +122,69 @@ def test_slurm_rejects_nonpositive_resources(setting: str, value: int) -> None:
 
 def test_slurm_initialize_forwards_memory_budgets() -> None:
     """Profile resource settings reach the Slurm configuration factory."""
-    with patch.object(config, 'get_slurm_config') as factory, patch.object(config.parsl, 'load'):
+    with patch.object(config, 'get_slurm_config') as factory, patch.object(config.parsl, 'load'), \
+         patch.object(config, 'configure_sqlite_monitoring'), \
+         patch('pac_man.events.install_event_tracking'):
         config.initialize_parsl(
-            backend='slurm', max_tier0_workers=0, slurm_tier0_memory_gb=64, slurm_weblog_memory_gb=4
+            backend='slurm', max_tier0_workers=0, slurm_tier0_memory_gb=64, slurm_weblog_memory_gb=4,
+            slurm_mail_user='alice@example.org', slurm_mail_type='BEGIN,END,FAIL',
+            slurm_walltime='08:30:00', slurm_max_idletime=600,
         )
     assert factory.call_args.kwargs['max_tier0_workers'] == 10
     assert factory.call_args.kwargs['tier0_memory_gb'] == 64
     assert factory.call_args.kwargs['weblog_memory_gb'] == 4
+    assert factory.call_args.kwargs['walltime'] == '08:30:00'
+    assert factory.call_args.kwargs['max_idletime'] == 600
+    assert factory.call_args.kwargs['mail_user'] == 'alice@example.org'
+    assert factory.call_args.kwargs['mail_type'] == 'BEGIN,END,FAIL'
+
+
+@pytest.mark.parametrize(
+    'settings, directives',
+    [
+        ({}, []),
+        (dict(mail_user='alice@example.org', mail_type='begin, end,fail,BEGIN'),
+         ['#SBATCH --mail-user=alice@example.org', '#SBATCH --mail-type=BEGIN,END,FAIL']),
+        (dict(mail_type='FAIL'), ['#SBATCH --mail-type=FAIL']),
+        (dict(mail_user='alice,bob@example.org', mail_type='NONE'),
+         ['#SBATCH --mail-user=alice,bob@example.org', '#SBATCH --mail-type=NONE']),
+    ],
+)
+def test_slurm_worker_mail_submit_scripts(settings: dict, directives: list[str], tmp_path: Path) -> None:
+    """Each pool's actual submit script requests only the configured mail events."""
+    with (
+        patch.object(config.SlurmProvider, 'execute_wait', return_value=(0, 'Submitted batch job 123', '')),
+        patch.object(config, 'address_by_hostname', return_value='127.0.0.1'),
+        patch.object(config, 'get_monitoring_hub', return_value=None),
+    ):
+        cfg = config.get_slurm_config(**settings)
+        for executor in cfg.executors:
+            provider = executor.provider
+            provider.script_dir = str(tmp_path / executor.label)
+            Path(provider.script_dir).mkdir()
+            provider.submit('true', tasks_per_node=1)
+            script = next(Path(provider.script_dir).glob('parsl.slurm.*')).read_text()
+            actual = [line for line in script.splitlines() if line.startswith('#SBATCH --mail-')]
+            assert actual == directives
+
+
+@pytest.mark.parametrize(
+    'settings',
+    [
+        dict(mail_user='alice@example.org\n#SBATCH --exclusive'),
+        dict(mail_user='alice@example.org --exclusive'),
+        dict(mail_type='BEGIN\rEND'),
+        dict(mail_type='START'),
+        dict(mail_type='BEGIN,,END'),
+        dict(mail_type='NONE,FAIL'),
+    ],
+)
+def test_invalid_slurm_mail_fails_before_scheduler_access(settings: dict) -> None:
+    """Malformed mail settings fail locally before constructing a provider."""
+    with patch.object(config, 'SlurmProvider') as provider:
+        with pytest.raises(ValueError):
+            config.get_slurm_config(**settings)
+        provider.assert_not_called()
 
 
 def test_slurm_scaling_tracks_demand_and_releases_idle_blocks() -> None:
@@ -220,13 +278,29 @@ def test_condor_config_applies_matching_and_accounting_controls() -> None:
             project="demo",
             requirements="TARGET.HasFeature == true",
             accounting_group="group.demo",
+            schedd="schedd.example.org",
+            pool="collector.example.org",
         )
 
     for executor in parsl_config["executors"]:
         provider = executor["provider"]
         assert provider["project"] == '"demo"'
         assert provider["requirements"] == "TARGET.HasFeature == true"
+        assert provider["schedd"] == "schedd.example.org"
+        assert provider["pool"] == "collector.example.org"
         assert 'accounting_group = group.demo\n' in provider["scheduler_options"]
+
+
+def test_initialize_forwards_remote_condor_settings() -> None:
+    """Remote queue selectors reach the HTCondor factory."""
+    with patch.object(config, 'get_condor_config') as factory, patch.object(config.parsl, 'load'), \
+         patch.object(config, 'configure_sqlite_monitoring'), \
+         patch('pac_man.events.install_event_tracking'):
+        config.initialize_parsl(
+            backend='htcondor', condor_schedd='schedd.example.org', condor_pool='collector.example.org',
+        )
+    assert factory.call_args.kwargs['schedd'] == 'schedd.example.org'
+    assert factory.call_args.kwargs['pool'] == 'collector.example.org'
 
 
 def test_condor_accounting_group_rejects_newlines() -> None:
@@ -278,3 +352,24 @@ def test_condor_accounting_group_submit_dry_run(
     assert attributes['acctgroup'] == 'group.demo'
     assert attributes['acctgroupuser'] == 'alice'
     assert attributes['accountinggroup'] == 'group.demo.alice'
+
+@pytest.mark.parametrize("settings", [
+    {"walltime": "00:00:00"}, {"walltime": "04:99:00"},
+    {"walltime": "4h"}, {"max_idletime": -1}, {"max_idletime": float("nan")},
+])
+def test_slurm_rejects_invalid_time_limits(settings):
+    with pytest.raises(ValueError):
+        config.get_slurm_config(**settings)
+
+
+@pytest.mark.parametrize('factory', [
+    config.get_local_threads_config, config.get_local_subprocess_config,
+    config.get_condor_config, config.get_slurm_config,
+])
+def test_parsl_sqlite_diagnostics_require_explicit_opt_in(factory):
+    hub = Mock()
+    with patch.object(config, 'get_monitoring_hub', return_value=hub) as create:
+        assert factory().monitoring is None
+        create.assert_not_called()
+        assert factory(parsl_monitoring=True).monitoring is hub
+        create.assert_called_once()

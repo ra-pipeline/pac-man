@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import math
 import os
 import re
 from pathlib import Path
@@ -14,6 +16,10 @@ from parsl.monitoring.radios.udp import UDPRadio
 from parsl.providers import LocalProvider
 
 from pac_man.logging_utils import configure_console_logging
+from pac_man.monitoring import (
+    configure_local_monitoring, publish_monitoring_location,
+    configure_sqlite_monitoring,
+)
 from pac_man.providers import NamedCondorProvider as CondorProvider, NamedSlurmProvider as SlurmProvider
 
 _PACKAGE_SRC = str(Path(__file__).resolve().parent.parent)
@@ -27,6 +33,29 @@ def _clean_optional_setting(value: str | None) -> str | None:
         raise ValueError('Scheduler settings must not contain newlines')
     stripped = value.strip()
     return stripped or None
+
+
+def _slurm_mail_options(mail_user: str | None, mail_type: str | None) -> str:
+    """Build validated Slurm mail directives for both worker pools."""
+    user = _clean_optional_setting(mail_user)
+    types = _clean_optional_setting(mail_type)
+    options = []
+    if user:
+        if not re.fullmatch(r'[A-Za-z0-9_.+%@,-]+', user):
+            raise ValueError('slurm_mail_user must be a login or email address (comma-separated recipients allowed)')
+        options.append(f'#SBATCH --mail-user={user}')
+    if types:
+        events = list(dict.fromkeys(event.strip().upper() for event in types.split(',')))
+        valid = {
+            'NONE', 'BEGIN', 'END', 'FAIL', 'REQUEUE', 'ALL', 'INVALID_DEPEND',
+            'STAGE_OUT', 'TIME_LIMIT', 'TIME_LIMIT_90', 'TIME_LIMIT_80', 'TIME_LIMIT_50', 'ARRAY_TASKS',
+        }
+        if any(event not in valid for event in events):
+            raise ValueError('slurm_mail_type must contain comma-separated Slurm mail events, e.g. BEGIN,END,FAIL')
+        if 'NONE' in events and len(events) != 1:
+            raise ValueError('slurm_mail_type NONE cannot be combined with other events')
+        options.append(f"#SBATCH --mail-type={','.join(events)}")
+    return '\n'.join(options) + ('\n' if options else '')
 
 
 def _quote_condor_string(value: str) -> str:
@@ -116,7 +145,7 @@ class XvfbLauncher(Launcher):
         return f"env -u DBUS_SESSION_BUS_ADDRESS QT_X11_NO_MITSHM=1 xvfb-run -a -s '-screen 0 1024x768x24' {command}"
 
 
-def get_local_threads_config() -> Config:
+def get_local_threads_config(parsl_monitoring: bool = False) -> Config:
     """Returns a Parsl Config using local Python threads.
 
     WARNING: Not safe for CASA execution as CASA is not thread-safe.
@@ -139,7 +168,7 @@ def get_local_threads_config() -> Config:
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
         ],
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -150,7 +179,9 @@ WORKER_THREAD_LIMIT_ENV = (
 )
 
 
-def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: int = 2) -> Config:
+def get_local_subprocess_config(
+    max_tier0_workers: int = 4, max_weblog_workers: int = 2, parsl_monitoring: bool = False,
+) -> Config:
     """Returns a Parsl Config using local subprocesses.
 
     Safe for CASA execution since each task gets its own memory space.
@@ -179,7 +210,7 @@ def get_local_subprocess_config(max_tier0_workers: int = 4, max_weblog_workers: 
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
         ],
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -190,6 +221,9 @@ def get_condor_config(
     requirements: str | None = None,
     accounting_group: str | None = None,
     profile_name: str = 'pacman',
+    schedd: str | None = None,
+    pool: str | None = None,
+    parsl_monitoring: bool = False,
 ) -> Config:
     """Returns a Parsl Config tailored for HTCondor OSG execution.
 
@@ -200,6 +234,8 @@ def get_condor_config(
         requirements: Optional HTCondor ClassAd requirements expression.
         accounting_group: Accounting group, inherited from an enclosing Condor job when omitted.
         profile_name: Short profile prefix for scheduler display names.
+        schedd: Optional remote schedd daemon name.
+        pool: Optional collector host for locating the schedd.
     """
     project, accounting_group = _resolve_condor_routing(project, accounting_group)
     provider_project = _quote_condor_string(project) if project else 'undefined'
@@ -212,6 +248,8 @@ def get_condor_config(
                 address=address_by_hostname(),
                 provider=CondorProvider(
                     profile_name=profile_name,
+                    schedd=schedd,
+                    pool=pool,
                     role='t0',
                     init_blocks=1,
                     min_blocks=0,
@@ -229,6 +267,8 @@ def get_condor_config(
                 address=address_by_hostname(),
                 provider=CondorProvider(
                     profile_name=profile_name,
+                    schedd=schedd,
+                    pool=pool,
                     role='wl',
                     init_blocks=1,
                     min_blocks=0,
@@ -241,7 +281,7 @@ def get_condor_config(
                 remote_monitoring_radio=UDPRadio(address=address_by_hostname(), port=0),
             ),
         ],
-        monitoring=get_monitoring_hub(),
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -254,12 +294,18 @@ def get_slurm_config(
     constraint: str | None = None,
     tier0_memory_gb: int = 32,
     weblog_memory_gb: int = 8,
+    walltime: str = '168:00:00',
+    max_idletime: float = 120,
     profile_name: str = 'pacman',
+    mail_user: str | None = None,
+    mail_type: str | None = None,
+    parsl_monitoring: bool = False,
 ) -> Config:
     """Scale nonexclusive Slurm blocks on demand, with one CPU and worker per block.
 
     Memory settings apply to each worker's block. Worker limits cap the
     number of blocks in each pool.
+    Optional mail settings request scheduler notifications for each worker job.
     """
     for name, value in (
         ('max_tier0_workers', max_tier0_workers),
@@ -269,6 +315,15 @@ def get_slurm_config(
     ):
         if value < 1:
             raise ValueError(f'{name} must be positive')
+    if (
+        not isinstance(walltime, str)
+        or not re.fullmatch(r'[0-9]+:[0-5][0-9]:[0-5][0-9]', walltime)
+        or not any(int(v) for v in walltime.split(':'))
+    ):
+        raise ValueError('slurm_walltime must be a positive duration in HH:MM:SS format')
+    if not math.isfinite(max_idletime) or max_idletime < 0:
+        raise ValueError('slurm_max_idletime must be finite and nonnegative')
+    mail_options = _slurm_mail_options(mail_user, mail_type)
     effective_partition = _clean_optional_setting(partition) or _clean_optional_setting(
         os.environ.get('SLURM_JOB_PARTITION')
     )
@@ -283,9 +338,11 @@ def get_slurm_config(
                     profile_name=profile_name,
                     role='t0',
                     exclusive=False,
+                    walltime=walltime,
                     nodes_per_block=1,
                     cores_per_node=1,
                     mem_per_node=tier0_memory_gb,
+                    scheduler_options=mail_options,
                     partition=effective_partition,
                     account=_clean_optional_setting(account),
                     qos=_clean_optional_setting(qos),
@@ -306,9 +363,11 @@ def get_slurm_config(
                     profile_name=profile_name,
                     role='wl',
                     exclusive=False,
+                    walltime=walltime,
                     nodes_per_block=1,
                     cores_per_node=1,
                     mem_per_node=weblog_memory_gb,
+                    scheduler_options=mail_options,
                     partition=effective_partition,
                     account=_clean_optional_setting(account),
                     qos=_clean_optional_setting(qos),
@@ -322,8 +381,8 @@ def get_slurm_config(
             ),
         ],
         strategy='htex_auto_scale',
-        max_idletime=120,
-        monitoring=get_monitoring_hub(),
+        max_idletime=max_idletime,
+        monitoring=get_monitoring_hub() if parsl_monitoring else None,
     )
 
 
@@ -340,8 +399,16 @@ def initialize_parsl(
     condor_accounting_group: str | None = None,
     slurm_tier0_memory_gb: int = 32,
     slurm_weblog_memory_gb: int = 8,
+    slurm_walltime: str = '168:00:00',
+    slurm_max_idletime: float = 120,
     parsl_loglevel: str = 'info',
     profile_name: str = 'pacman',
+    monitoring_local_dir: str | None = None,
+    parsl_monitoring: bool = False,
+    slurm_mail_user: str | None = None,
+    slurm_mail_type: str | None = None,
+    condor_schedd: str | None = None,
+    condor_pool: str | None = None,
 ) -> None:
     """Initializes Parsl with the appropriate configuration.
 
@@ -358,8 +425,16 @@ def initialize_parsl(
         condor_accounting_group: Optional HTCondor accounting group.
         slurm_tier0_memory_gb: Memory requested per Slurm compute worker.
         slurm_weblog_memory_gb: Memory requested per Slurm weblog worker.
+        slurm_walltime: Lifetime of each Slurm worker allocation (HH:MM:SS).
+        slurm_max_idletime: Seconds before Parsl releases idle Slurm workers.
         parsl_loglevel: Parsl console verbosity, independent of pipeline logging.
         profile_name: Profile prefix for Slurm job names and HTCondor batch names.
+        parsl_monitoring: Enable optional Parsl SQLite diagnostics (default False).
+        monitoring_local_dir: Local scratch root for the live monitoring database.
+        slurm_mail_user: Worker notification recipient (login or email address).
+        slurm_mail_type: Comma-separated Slurm notification events, e.g. BEGIN,END,FAIL.
+        condor_schedd: Remote schedd daemon name for worker job management.
+        condor_pool: Collector host used to locate the remote schedd.
     """
     configure_console_logging(parsl_loglevel)
     for var in [
@@ -372,21 +447,25 @@ def initialize_parsl(
         os.environ.setdefault(var, '1')
 
     if backend == 'threads':
-        config = get_local_threads_config()
+        config = get_local_threads_config(parsl_monitoring=parsl_monitoring)
     elif backend == 'subprocess':
         effective_tier0 = 4 if max_tier0_workers is None else max_tier0_workers
         config = get_local_subprocess_config(
             max_tier0_workers=effective_tier0,
             max_weblog_workers=max_weblog_workers,
+            parsl_monitoring=parsl_monitoring,
         )
     elif backend == 'htcondor':
         effective_tier0 = 50 if not max_tier0_workers else max_tier0_workers
         config = get_condor_config(
             max_tier0_workers=effective_tier0,
             max_weblog_workers=max_weblog_workers,
+            parsl_monitoring=parsl_monitoring,
             project=condor_project,
             requirements=condor_requirements,
             accounting_group=condor_accounting_group,
+            schedd=condor_schedd,
+            pool=condor_pool,
             profile_name=profile_name,
         )
     elif backend == 'slurm':
@@ -394,12 +473,17 @@ def initialize_parsl(
         config = get_slurm_config(
             max_tier0_workers=effective_tier0,
             max_weblog_workers=max_weblog_workers,
+            parsl_monitoring=parsl_monitoring,
             partition=slurm_partition,
             account=slurm_account,
             qos=slurm_qos,
             constraint=slurm_constraint,
             tier0_memory_gb=slurm_tier0_memory_gb,
             weblog_memory_gb=slurm_weblog_memory_gb,
+            walltime=slurm_walltime,
+            max_idletime=slurm_max_idletime,
+            mail_user=slurm_mail_user,
+            mail_type=slurm_mail_type,
             profile_name=profile_name,
         )
     else:
@@ -407,4 +491,23 @@ def initialize_parsl(
             f'Unknown Parsl backend requested: {backend}. Choose from: threads, subprocess, htcondor, slurm'
         )
 
-    parsl.load(config)
+    from pac_man.events import emit_event, install_event_tracking
+
+    diagnostic_error = None
+    if config.monitoring is not None:
+        try:
+            configure_local_monitoring(config.monitoring, monitoring_local_dir)
+            configure_sqlite_monitoring(config.monitoring, config.run_dir)
+        except ValueError:
+            raise
+        except Exception as error:
+            diagnostic_error = str(error)
+            logging.getLogger(__name__).warning('SQLite diagnostics unavailable; continuing with JSONL: %s', error)
+            config.monitoring = None
+    dfk = parsl.load(config)
+    install_event_tracking(dfk, profile_name)
+    dfk.pacman_sqlite_available = config.monitoring is not None
+    if config.monitoring is not None:
+        publish_monitoring_location(config.monitoring, dfk.run_dir)
+    if diagnostic_error:
+        emit_event(dfk.pacman_events_dir, dfk.run_id, 'diagnostic', message=diagnostic_error)
