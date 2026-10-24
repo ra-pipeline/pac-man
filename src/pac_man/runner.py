@@ -301,6 +301,62 @@ def create_stage_qa_and_weblog_app(stage_name: str, fn=_execute_qa_and_weblog):
 # Backward compatibility alias
 async_qa_and_weblog = create_stage_qa_and_weblog_app('async_qa_and_weblog')
 
+# Tasks whose QA calculation or WebLog rendering explicitly reads the MeasurementSet on disk
+TASKS_READING_MS_IN_BACKGROUND: set[str] = {
+    'hifa_importdata',
+    'hifv_importdata',
+    'hif_importdata',
+    'hifa_applycal',
+    'hifv_flagdata',
+    'hifv_checkflag',
+    'hsd_imaging',
+}
+
+# Tasks that perform in-place mutations on the shared MeasurementSet (FLAG, DATA, CORRECTED_DATA, WEIGHT)
+TASKS_MUTATING_MS: set[str] = {
+    'hifv_hanning',
+    'hif_applycal',
+    'hifa_applycal',
+    'hifv_applycals',
+    'statwt',
+    'hifv_statwt',
+}
+
+# Tasks that package pipeline deliverables or require full interactive synchronization
+TASKS_REQUIRING_FULL_DRAIN: set[str] = {
+    'hifa_exportdata',
+    'hifv_exportdata',
+    'hif_exportdata',
+    'exportdata',
+    'exportvlassdata',
+    'hifv_exportvlassdata',
+    'breakpoint',
+}
+
+
+def is_ms_mutative_task(task_name: str) -> bool:
+    """Determine if a pipeline task modifies existing MeasurementSet data in-place."""
+    if task_name in TASKS_MUTATING_MS:
+        return True
+    # Any task performing flag operations mutates the MS FLAG column in-place
+    if 'flag' in task_name.lower():
+        return True
+    return False
+
+
+class InFlightStageTask:
+    """Tracks in-flight background worker futures with stage metadata."""
+
+    def __init__(self, future, task_name: str, stage_nr: int):
+        self.future = future
+        self.task_name = task_name
+        self.stage_nr = stage_nr
+        self.reads_ms = task_name in TASKS_READING_MS_IN_BACKGROUND
+
+    @property
+    def is_done(self) -> bool:
+        return self.future.done()
+
 
 def _run_task_sequence(
     task_sequence,
@@ -414,6 +470,7 @@ def _run_task_sequence(
 
     last_background_future = None
     background_futures = []
+    in_flight_tasks: list[InFlightStageTask] = []
 
     try:
         procedure_stage_nr = 0
@@ -424,11 +481,38 @@ def _run_task_sequence(
             if procedure_stage_nr < startstage:
                 continue
 
-            if task_name in ['hifa_exportdata', 'hifv_exportdata', 'hif_exportdata'] and background_futures:
-                LOG.info('PAC-MAN: Waiting for all background Weblog renders to finish before %s...', task_name)
-                for f in background_futures:
-                    f.result()
-                LOG.info('PAC-MAN: Background Weblogs finished. Proceeding with %s.', task_name)
+            # Stage Synchronization Barrier
+            # 1. Full drain if upcoming stage packages deliverables or hits a breakpoint
+            if task_name in TASKS_REQUIRING_FULL_DRAIN:
+                active_tasks = [t for t in in_flight_tasks if not t.is_done]
+                if active_tasks:
+                    LOG.info(
+                        'PAC-MAN: Stage %03d (%s) requires packaging synchronization. Awaiting %d background workers...',
+                        procedure_stage_nr,
+                        task_name,
+                        len(active_tasks),
+                    )
+                    for t in active_tasks:
+                        t.future.result()
+                    in_flight_tasks.clear()
+                    last_background_future = None
+
+            # 2. Targeted resource barrier if upcoming stage mutates MS in-place
+            elif is_ms_mutative_task(task_name):
+                conflicting = [t for t in in_flight_tasks if not t.is_done and t.reads_ms]
+                if conflicting:
+                    conflicts_str = ', '.join(f'Stage {t.stage_nr} ({t.task_name})' for t in conflicting)
+                    LOG.info(
+                        'PAC-MAN: Mutative Stage %03d (%s) detected resource contention with in-flight MS-reading workers [%s]. Awaiting completion...',
+                        procedure_stage_nr,
+                        task_name,
+                        conflicts_str,
+                    )
+                    for t in conflicting:
+                        t.future.result()
+                    # Retain non-conflicting pure HTML / caltable background workers in flight
+                    in_flight_tasks = [t for t in in_flight_tasks if not t.is_done and not t.reads_ms]
+                    last_background_future = in_flight_tasks[-1].future if in_flight_tasks else None
 
             LOG.info('\n%s\nPAC-MAN Executing Stage %d: %s\n%s', '=' * 60, procedure_stage_nr, task_name, '=' * 60)
 
@@ -555,6 +639,8 @@ def _run_task_sequence(
             )
 
             background_futures.append(bg_future)
+            in_flight_tasks = [t for t in in_flight_tasks if not t.is_done]
+            in_flight_tasks.append(InFlightStageTask(bg_future, task_name, result.stage_number))
             last_background_future = bg_future
 
             if importonly and task_name in import_tasks:
