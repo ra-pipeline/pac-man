@@ -81,3 +81,42 @@ def test_jsonl_dashboard_ignores_locked_diagnostic_database(tmp_path, monkeypatc
         assert len(app.dataframe[-1].value) == 2
     finally:
         connection.close()
+
+
+def test_timeline_keeps_compute_above_tier0_and_weblog_across_refreshes(tmp_path, monkeypatch):
+    import plotly.express as px
+
+    directory = tmp_path / 'events'
+    monkeypatch.setattr('sys.argv', ['dashboard.py'])
+    monkeypatch.setenv('PACMAN_EVENTS_DIR', str(directory))
+    events.emit_event(directory, 'run', 'workflow', workflow_name='test', state='running')
+    # Emit worker rows first and main stages out of order to exercise explicit ordering.
+    for task_id, executor, name in [(0, 'weblog_executor', 'render'), (1, 'tier0_executor', 'clean')]:
+        events.emit_event(directory, 'run', 'task', task_id=task_id, try_id=0,
+                          task_func_name=name, task_executor=executor, state='launched',
+                          task_time_invoked='2026-01-01T00:00:00+00:00',
+                          task_try_time_launched='2026-01-01T00:00:00+00:00')
+    for stage in (2, 1):
+        events.emit_event(directory, 'run', 'stage', stage_number=stage,
+                          stage_label=f'Stage_{stage:03d} [compute]', status='running',
+                          start_time=f'2026-01-01T00:00:0{stage}+00:00', hostname='main')
+    figures = []
+    original = px.timeline
+
+    def capture(*args, **kwargs):
+        figure = original(*args, **kwargs)
+        figures.append(figure)
+        return figure
+
+    expected = ['Stage_001 [compute]', 'Stage_002 [compute]', 'clean [tier0 subtask]', 'render [weblog]']
+    with patch.object(px, 'timeline', side_effect=capture):
+        app = AppTest.from_file(str(DASHBOARD), default_timeout=20).run()
+        assert not app.exception
+        assert list(figures[-1].layout.yaxis.categoryarray) == expected
+        assert figures[-1].layout.yaxis.autorange == 'reversed'
+        assert [trace.name for trace in figures[-1].data] == ['main_process', 'tier0_executor', 'weblog_executor']
+        events.emit_event(directory, 'run', 'stage', stage_number=3, stage_label='Stage_003 [compute]',
+                          status='running', start_time='2026-01-01T00:00:03+00:00', hostname='main')
+        app.run()
+        assert not app.exception
+        assert list(figures[-1].layout.yaxis.categoryarray) == expected[:2] + ['Stage_003 [compute]'] + expected[2:]

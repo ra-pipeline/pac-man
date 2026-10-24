@@ -17,6 +17,7 @@ from pathlib import Path
 from pac_man import config_loader
 from pac_man.config_loader import ResolvedProfile
 from pac_man.logging_utils import configure_console_logging
+from pac_man.paths import project_directories
 
 LOG = logging.getLogger('pac-man')
 
@@ -56,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         '-w',
         '--workdir',
         default=None,
-        help='Override working directory for pipeline execution.',
+        help='Override project directory containing working/ and rawdata/.',
     )
     parser.add_argument(
         '-b',
@@ -107,7 +108,7 @@ def apply_preflight_environment(profile: ResolvedProfile, workdir_override: str 
 
     Args:
         profile: Resolved profile configuration.
-        workdir_override: Optional CLI workdir override.
+        workdir_override: Optional CLI project-root override.
 
     Returns:
         Path to resolved target working directory.
@@ -123,19 +124,10 @@ def apply_preflight_environment(profile: ResolvedProfile, workdir_override: str 
     ]:
         os.environ.setdefault(var, thread_limit)
 
-    # Determine execution working directory
-    pixi_root = os.environ.get('PIXI_PROJECT_ROOT')
-    init_cwd = os.environ.get('INIT_CWD') or os.getcwd()
-
-    if workdir_override:
-        target_dir = Path(workdir_override).resolve()
-    elif profile.workdir:
-        target_dir = Path(profile.workdir).resolve()
-    elif pixi_root and (Path(init_cwd).resolve() == Path(pixi_root).resolve()):
-        target_dir = (Path(pixi_root) / 'working').resolve()
-    else:
-        target_dir = Path(init_cwd).resolve()
-
+    selected = workdir_override or profile.workdir or os.environ.get('INIT_CWD') or os.getcwd()
+    project_root, working_dir, _ = project_directories(selected)
+    profile.workdir = str(project_root)
+    target_dir = working_dir.resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(target_dir)
 
@@ -178,6 +170,15 @@ def execute_profile(profile: ResolvedProfile, dry_run: bool = False):
             raise FileNotFoundError(f'PPR file not found: {profile.ppr}')
 
         LOG.info('PPR XML file: %s', profile.ppr)
+        rawdata_dir = profile.rawdata
+        if rawdata_dir is None and profile.workdir:
+            _, _, candidate = project_directories(profile.workdir)
+            if candidate.is_dir():
+                rawdata_dir = str(candidate)
+        if rawdata_dir is not None:
+            if not os.path.isdir(rawdata_dir):
+                raise FileNotFoundError(f'PPR raw-data directory not found: {rawdata_dir}')
+            LOG.info('PPR raw-data directory: %s', rawdata_dir)
         LOG.info('Import only: %s', profile.importonly)
         LOG.info('Breakpoint: name=%s action=%s', profile.bp_name, profile.bpaction)
 
@@ -191,6 +192,7 @@ def execute_profile(profile: ResolvedProfile, dry_run: bool = False):
             LOG.info('Dispatching to pac_man_executevlappr...')
             return runner.pac_man_executevlappr(
                 pprXmlFile=profile.ppr,
+                rawdata_dir=rawdata_dir,
                 importonly=profile.importonly,
                 bp_name=profile.bp_name,
                 bpaction=profile.bpaction,
@@ -227,6 +229,7 @@ def execute_profile(profile: ResolvedProfile, dry_run: bool = False):
             LOG.info('Dispatching to pac_man_executeppr...')
             return runner.pac_man_executeppr(
                 pprXmlFile=profile.ppr,
+                rawdata_dir=rawdata_dir,
                 importonly=profile.importonly,
                 bp_name=profile.bp_name,
                 bpaction=profile.bpaction,

@@ -36,6 +36,33 @@ from pac_man.monitoring import snapshot_monitoring
 LOG = logging.getLogger(__name__)
 
 
+def _resolve_ppr_rawdata_dir(rawdata_dir: str | None, default: str) -> str:
+    """Resolve an explicit input directory without deriving it from physical cwd."""
+    if rawdata_dir is None:
+        return default
+    if not rawdata_dir.strip():
+        raise ValueError('rawdata_dir must not be empty')
+    path = os.path.abspath(os.path.expanduser(os.path.expandvars(rawdata_dir)))
+    if '$' in path:
+        raise ValueError('rawdata_dir contains an unset environment variable')
+    if not os.path.isdir(path):
+        raise FileNotFoundError(f'PPR raw-data directory not found: {path}')
+    return path
+
+
+def _ppr_directories(relative_path: str, rawdata_dir: str | None) -> tuple[str, str]:
+    """Prefer an explicit input root, then a nonempty scheduler root, then cwd."""
+    scheduler_root = os.environ.get('SCIPIPE_ROOTDIR', '').strip()
+    if scheduler_root and rawdata_dir is None:
+        root = os.path.expanduser(os.path.expandvars(scheduler_root))
+        working_dir = os.path.abspath(os.path.join(root, relative_path, 'working'))
+        raw_dir = os.path.abspath(os.path.join(root, relative_path, 'rawdata'))
+    else:
+        working_dir = os.getcwd()
+        raw_dir = os.path.abspath(os.path.join('..', 'rawdata'))
+    return working_dir, _resolve_ppr_rawdata_dir(rawdata_dir, raw_dir)
+
+
 def _configure_casalog(
     casalog_file: str | None = None,
     log2term: bool | None = None,
@@ -725,6 +752,7 @@ def pac_man_executeppr(
     startstage: int | None = None,
     exitstage: int | None = None,
     *,
+    rawdata_dir: str | None = None,
     slurm_partition: str | None = None,
     slurm_account: str | None = None,
     slurm_qos: str | None = None,
@@ -751,6 +779,7 @@ def pac_man_executeppr(
 
     Args:
         pprXmlFile: Path to PPR XML file.
+        rawdata_dir: Explicit PPR input directory; defaults to the existing directory layout.
         importonly: Whether to stop processing after importing data (default: False).
         bp_name: Name of command considered as a break point.
         bpaction: Action at breakpoint ('ignore', 'break', 'resume').
@@ -797,12 +826,8 @@ def pac_man_executeppr(
     )
     processing_intents = pipe_eppr._getProcessingIntents(intentsDict, procedureName)
 
-    if 'SCIPIPE_ROOTDIR' in os.environ:
-        working_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'working')
-        raw_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'rawdata')
-    else:
-        working_dir = os.path.abspath(os.path.join('..', 'working'))
-        raw_dir = os.path.abspath(os.path.join('..', 'rawdata'))
+    working_dir, raw_dir = _ppr_directories(relativePath, rawdata_dir)
+    LOG.info('PPR input raw-data directory: %s', raw_dir)
 
     bpset = False
     if bp_name != '':
@@ -860,7 +885,7 @@ def pac_man_executeppr(
                 break
         sessions.append(session)
         asdm_path = os.path.join(raw_dir, asdm_name)
-        if not os.path.exists(asdm_path) and os.path.exists(asdm_name):
+        if rawdata_dir is None and not os.path.exists(asdm_path) and os.path.exists(asdm_name):
             asdm_path = os.path.abspath(asdm_name)
         files.append(asdm_path)
 
@@ -943,6 +968,7 @@ def pac_man_executevlappr(
     startstage: int | None = None,
     exitstage: int | None = None,
     *,
+    rawdata_dir: str | None = None,
     slurm_partition: str | None = None,
     slurm_account: str | None = None,
     slurm_qos: str | None = None,
@@ -969,6 +995,7 @@ def pac_man_executevlappr(
 
     Args:
         pprXmlFile: Path to PPR XML file.
+        rawdata_dir: Explicit PPR input directory; defaults to the existing directory layout.
         importonly: Whether to stop processing after importing data (default: False).
         loglevel: Logging verbosity ('debug', 'info', 'warning', 'error').
         plotlevel: Plot generation level ('summary', 'default', 'all').
@@ -1013,12 +1040,8 @@ def pac_man_executevlappr(
     )
     processing_intents = pipe_vlappr._getProcessingIntents(intentsDict, procedureName)
 
-    if 'SCIPIPE_ROOTDIR' in os.environ:
-        working_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'working')
-        raw_dir = os.path.join(os.path.expandvars('$SCIPIPE_ROOTDIR'), relativePath, 'rawdata')
-    else:
-        working_dir = os.path.abspath(os.path.join('..', 'working'))
-        raw_dir = os.path.abspath(os.path.join('..', 'rawdata'))
+    working_dir, raw_dir = _ppr_directories(relativePath, rawdata_dir)
+    LOG.info('PPR input raw-data directory: %s', raw_dir)
 
     context = cli.h_init(loglevel=loglevel, plotlevel=plotlevel, processing_intents=processing_intents)
 
@@ -1046,7 +1069,7 @@ def pac_man_executevlappr(
         session = defsession
         sessions.append(session)
         asdm_path = os.path.join(raw_dir, asdm_name)
-        if not os.path.exists(asdm_path) and os.path.exists(asdm_name):
+        if rawdata_dir is None and not os.path.exists(asdm_path) and os.path.exists(asdm_name):
             asdm_path = os.path.abspath(asdm_name)
         files.append(asdm_path)
 
